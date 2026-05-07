@@ -48,7 +48,10 @@ def train(ctx):
         timeout_seconds=ctx.config.agent.per_train_timeout_seconds,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"Claude session failed: {result.stderr[:400]}")
+        raise RuntimeError(
+            f"Claude session failed (rc={result.returncode}). "
+            f"stderr={result.stderr[:300]!r} stdout={result.stdout[:600]!r}"
+        )
 
     strategy_path = attempt_dir / "strategy.py"
     if not strategy_path.exists():
