@@ -35,7 +35,9 @@ data/catalog/*
 !data/catalog/README.md
 
 # Claude internal state (scheduled_tasks.lock, session caches)
-.claude/
+.claude/scheduled_tasks.lock
+.claude/sessions/
+.claude/cache/
 
 # Runtime-mutable persistence files written by team Claude sessions.
 # Seed versions of `correction_map.json`, `regime_weights.json`, `bandit/state.json`,
