@@ -56,3 +56,7 @@ teams/*/blender/log.md
 teams/*/reflections/week_*.md
 teams/*/reflections.md
 teams/*/leaderboard_observations.md
+
+
+# APM dependencies
+apm_modules/

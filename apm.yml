@@ -1,0 +1,10 @@
+name: nautilus-competition-run
+version: 1.0.0
+description: APM project for nautilus-competition-run
+author: Raul
+dependencies:
+  apm:
+  - cajias/nautilus-competition
+  mcp: []
+includes: auto
+scripts: {}

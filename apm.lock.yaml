@@ -1,0 +1,9 @@
+lockfile_version: '1'
+generated_at: '2026-05-07T12:09:49.273718+00:00'
+apm_version: 0.12.1
+dependencies:
+- repo_url: cajias/nautilus-competition
+  host: github.com
+  resolved_commit: 45cfbff32f83a39b3663613caafbb6e4d2d91310
+  package_type: marketplace_plugin
+  content_hash: sha256:337e35bbe69b32d46838b6ee25d9fbad02a1ab0b411929ab4ae021d401be865f
