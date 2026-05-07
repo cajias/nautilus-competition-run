@@ -1,0 +1,5 @@
+{
+  "bull": {"mini": 0.33, "base": 0.34, "extended": 0.33},
+  "bear": {"mini": 0.33, "base": 0.34, "extended": 0.33},
+  "chop": {"mini": 0.33, "base": 0.34, "extended": 0.33}
+}

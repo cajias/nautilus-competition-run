@@ -1,0 +1,38 @@
+# nautilus-competition-run — workspace config.yaml
+# Schema mirrors nautilus_competition/config.py.
+
+name: nautilus-comp-run
+
+# OPERATOR FILLS BEFORE RUN — placeholder windows below.
+# Each window's train/test/eval/paper must be set per round.
+rounds: 1
+windows:
+  - train: { start: "2024-01-01T00:00:00Z", end: "2024-02-01T00:00:00Z" }
+    test:  { start: "2024-02-01T00:00:00Z", end: "2024-02-15T00:00:00Z" }
+    eval:  { start: "2024-02-15T00:00:00Z", end: "2024-03-01T00:00:00Z" }
+    paper: { start: "2024-03-01T00:00:00Z", end: "2024-03-15T00:00:00Z" }
+
+paper:
+  mode: simulated                    # "simulated" needs no creds; "live" requires Binance Spot Testnet creds
+  duration_minutes: 60                # only used by live mode (simulated uses paper window)
+  starting_pot_usdt: 1000.0           # GAIN FACTOR base — final_equity / 1000
+
+# OPERATOR FILLS BEFORE RUN — placeholder. NautilusTrader expects fully-qualified IDs.
+instrument:
+  symbol: "BTCUSDT.BINANCE"
+  bar_type: "BTCUSDT.BINANCE-5-MINUTE-LAST-EXTERNAL"
+
+agent:
+  command: ["claude", "--print", "--output-format", "json"]
+  per_train_timeout_seconds: 3600     # 60 min global; teams invoke claude ONCE per train()
+  max_train_iterations: 4             # harness-level retry; ONE strategy.py per Claude session
+
+# Return-dominant per user decision: gain factor on $1000.
+scoring:
+  weights:
+    return: 1.0
+    sharpe: 0.0
+    max_dd: 0.0
+
+catalog:
+  path: data/catalog

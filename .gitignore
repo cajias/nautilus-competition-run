@@ -1,0 +1,35 @@
+# Per-run artifacts the harness produces
+runs/
+
+# Local secrets — copy from .env.local.template
+.env.local
+.env
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
+
+# Foundation-model checkpoints (HuggingFace cache)
+.cache/
+
+# Per-team scratch — large + regenerable
+teams/*/attempts/
+teams/*/forecasts/
+
+# Per-team forensics produced inside a Claude session — not source of truth, but kept locally
+teams/*/spokes/*/attempts/
+teams/*/streams/*/attempts/
+teams/*/experts/*/attempts/
+teams/*/_inbox/
+
+# Catalog parquet (large; seed via examples/demo_competition/scripts/seed_catalog.py)
+data/catalog/*
+!data/catalog/.gitkeep
+!data/catalog/README.md
