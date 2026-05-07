@@ -1,0 +1,44 @@
+# nautilus-competition-run — TEST config (Task #7 stage 5)
+# Slimmed for short feedback loop. Restore from config.yaml.full after the run.
+
+name: smoke_test
+
+# Match the demo's catalog grid (5-min bars, 2025-01-01..2025-01-04).
+# 4 contiguous windows (full demo span).
+# `rounds` is implicit in len(windows) — schema is forbid_unknown_fields.
+windows:
+  - train:
+      start: "2025-01-01T00:00:00Z"
+      end:   "2025-01-02T17:40:00Z"
+    test:
+      start: "2025-01-02T17:40:00Z"
+      end:   "2025-01-03T10:20:00Z"
+    eval:
+      start: "2025-01-03T10:20:00Z"
+      end:   "2025-01-04T03:00:00Z"
+    paper:
+      start: "2025-01-04T03:00:00Z"
+      end:   "2025-01-04T11:20:00Z"
+
+paper:
+  mode: simulated
+  duration_minutes: 1
+  starting_pot_usdt: 1000.0
+
+instrument:
+  symbol: "BTCUSDT.BINANCE"
+  bar_type: "BTCUSDT.BINANCE-5-MINUTE-LAST-EXTERNAL"
+
+agent:
+  command: ["claude", "--print", "--output-format", "json"]
+  per_train_timeout_seconds: 600
+  max_train_iterations: 1
+
+scoring:
+  weights:
+    sharpe: 0.0
+    total_return: 1.0
+    max_drawdown: 0.0
+
+catalog:
+  path: data/catalog

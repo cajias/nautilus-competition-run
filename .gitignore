@@ -33,3 +33,26 @@ teams/*/_inbox/
 data/catalog/*
 !data/catalog/.gitkeep
 !data/catalog/README.md
+
+# Claude internal state (scheduled_tasks.lock, session caches)
+.claude/
+
+# Runtime-mutable persistence files written by team Claude sessions.
+# Seed versions of `correction_map.json`, `regime_weights.json`, `bandit/state.json`,
+# and `forest/index.jsonl` (committed as neutral stubs) remain tracked — operators
+# can `git checkout` to reset between rounds. The patterns below are the things
+# that compound across rounds and shouldn't pollute git.
+teams/*/streams/*/memory.md
+teams/*/spokes/*/memory.md
+teams/*/experts/*/skills.md
+teams/*/conferences/budget/*.md
+teams/*/conferences/experience_sharing/*.md
+teams/*/conferences/extreme_market/*.md
+teams/*/forest/accepted/*.md
+teams/*/forest/rejected/*.md
+teams/*/bandit/log.jsonl
+teams/*/calibration/audit_*.md
+teams/*/blender/log.md
+teams/*/reflections/week_*.md
+teams/*/reflections.md
+teams/*/leaderboard_observations.md

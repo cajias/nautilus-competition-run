@@ -5,7 +5,8 @@ name: nautilus-comp-run
 
 # OPERATOR FILLS BEFORE RUN — placeholder windows below.
 # Each window's train/test/eval/paper must be set per round.
-rounds: 1
+# Number of rounds is implicit in len(windows) — schema rejects an explicit
+# `rounds:` key (config.py:CompetitionConfig is forbid_unknown_fields=True).
 windows:
   - train: { start: "2024-01-01T00:00:00Z", end: "2024-02-01T00:00:00Z" }
     test:  { start: "2024-02-01T00:00:00Z", end: "2024-02-15T00:00:00Z" }
@@ -13,8 +14,13 @@ windows:
     paper: { start: "2024-03-01T00:00:00Z", end: "2024-03-15T00:00:00Z" }
 
 paper:
-  mode: simulated                    # "simulated" needs no creds; "live" requires Binance Spot Testnet creds
-  duration_minutes: 60                # only used by live mode (simulated uses paper window)
+  # User directive: "We don't want a simulation. We want real data to catch
+  # real issues." Binance Spot Testnet — auto-loads creds from sibling
+  # ~/Projects/workspace/nautilus-trading/.envrc via the harness's _env.py.
+  # Confirmed cred presence: BINANCE_TESTNET_API_KEY + API_SECRET (PEM-backed)
+  # + ED25519_KEY_PATH auto-detected by ensure_ed25519_key_path().
+  mode: live
+  duration_minutes: 5                 # short live runs to catch real issues fast
   starting_pot_usdt: 1000.0           # GAIN FACTOR base — final_equity / 1000
 
 # OPERATOR FILLS BEFORE RUN — placeholder. NautilusTrader expects fully-qualified IDs.
@@ -28,11 +34,13 @@ agent:
   max_train_iterations: 4             # harness-level retry; ONE strategy.py per Claude session
 
 # Return-dominant per user decision: gain factor on $1000.
+# Canonical key names per nautilus_competition/config.py:WeightSpec —
+# `sharpe`, `total_return`, `max_drawdown`. Schema is forbid_unknown_fields.
 scoring:
   weights:
-    return: 1.0
     sharpe: 0.0
-    max_dd: 0.0
+    total_return: 1.0
+    max_drawdown: 0.0
 
 catalog:
   path: data/catalog

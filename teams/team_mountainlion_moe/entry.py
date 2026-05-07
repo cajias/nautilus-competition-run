@@ -9,6 +9,8 @@ import importlib.util
 from pathlib import Path
 
 from nautilus_competition.agent_runner import run_claude
+from nautilus_trader.model.data import BarType
+from nautilus_trader.model.identifiers import InstrumentId
 
 TEAM_DIR = Path(__file__).parent
 
@@ -57,5 +59,9 @@ def train(ctx):
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    cfg = mod.TeamStrategyConfig(**ctx.default_cfg_kwargs())
+    instrument = ctx.config.instrument
+    cfg = mod.TeamStrategyConfig(
+        instrument_id=InstrumentId.from_str(instrument.symbol),
+        bar_type=BarType.from_str(instrument.bar_type),
+    )
     return mod.TeamStrategy, cfg
