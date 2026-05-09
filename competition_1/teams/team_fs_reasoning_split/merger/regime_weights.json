@@ -1,0 +1,6 @@
+{
+  "bull":  {"factual": 0.7, "subjective": 0.3},
+  "bear":  {"factual": 0.7, "subjective": 0.3},
+  "chop":  {"factual": 0.8, "subjective": 0.2},
+  "notes": "iter0_adjustment — see notes/weight_changes.md"
+}

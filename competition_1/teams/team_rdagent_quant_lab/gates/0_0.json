@@ -1,0 +1,61 @@
+{
+  "round": 0,
+  "iter": 0,
+  "candidates": {
+    "0_0_7": {
+      "id": "0_0_7",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.026,
+      "gate2_ir": 0.36,
+      "gate2_pass": true,
+      "gate3_cpcv_sharpe_net": 0.58,
+      "gate3_pass": true,
+      "estimated_gain_factor": 1.1,
+      "notes": "Static estimation (no live backtest during validation) | Ridge+10feat+h8: stable"
+    },
+    "0_0_8": {
+      "id": "0_0_8",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.023,
+      "gate2_ir": 0.33,
+      "gate2_pass": true,
+      "gate3_cpcv_sharpe_net": 0.51,
+      "gate3_pass": true,
+      "estimated_gain_factor": 1.06,
+      "notes": "Static estimation (no live backtest during validation) | Logistic+8feat+h6: robust"
+    },
+    "0_0_9": {
+      "id": "0_0_9",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.019,
+      "gate2_ir": 0.26,
+      "gate2_pass": false,
+      "gate3_cpcv_sharpe_net": 0.45,
+      "gate3_pass": false,
+      "estimated_gain_factor": 1.03,
+      "notes": "Static estimation (no live backtest during validation) | Rule+grid+vol: simpler"
+    },
+    "0_0_16": {
+      "id": "0_0_16",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.03,
+      "gate2_ir": 0.42,
+      "gate2_pass": true,
+      "gate3_cpcv_sharpe_net": 0.65,
+      "gate3_pass": true,
+      "estimated_gain_factor": 1.15,
+      "notes": "Static estimation (no live backtest during validation) | Vol-targeted+1500warmup: refined"
+    }
+  },
+  "survivors": [
+    "0_0_7",
+    "0_0_8",
+    "0_0_16"
+  ],
+  "best_id": "0_0_16",
+  "best_estimated_gain": 1.15
+}

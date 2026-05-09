@@ -1,0 +1,7 @@
+{"id": "0_0_2", "parent_id": null, "status": "accepted", "arm": "factor-mining", "failure_class": "n/a", "ic": 0.0554, "ir": 1.095, "gain_factor": 0.7526}
+{"id": "0_0_5", "parent_id": null, "status": "rejected", "arm": "factor-mining", "failure_class": "alpha-decay", "ic": 0.0141, "ir": 0.101, "gain_factor": 0.8191}
+{"id": "0_0_6", "parent_id": null, "status": "rejected", "arm": "factor-mining", "failure_class": "regime-brittle", "ic": -0.1031, "ir": -0.862, "gain_factor": 0.7690}
+{"id": "0_0_7", "parent_id": "0_0_6", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.026, "ir": 0.36, "gain_factor": 1.10}
+{"id": "0_0_8", "parent_id": "0_0_2", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.023, "ir": 0.33, "gain_factor": 1.06}
+{"id": "0_0_9", "parent_id": null, "status": "rejected", "arm": "model-search", "failure_class": "overfit", "ic": 0.019, "ir": 0.26, "gain_factor": 1.03}
+{"id": "0_0_16", "parent_id": "0_0_2", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.030, "ir": 0.42, "gain_factor": 1.15}

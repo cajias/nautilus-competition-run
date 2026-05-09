@@ -1,5 +1,0 @@
-{
-  "bull": {"factual": 0.5, "subjective": 0.5},
-  "bear": {"factual": 0.5, "subjective": 0.5},
-  "chop": {"factual": 0.5, "subjective": 0.5}
-}

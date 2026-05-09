@@ -1,0 +1,17 @@
+{
+  "global": {"lambda_decay": 0.15, "version": 2},
+  "regimes": {
+    "trending_up": {
+      "bias_shift": 0.0,
+      "scale_correction": 1.0,
+      "coverage_metrics": {},
+      "n_observations": 0,
+      "last_updated_round": 0,
+      "per_checkpoint_bias": {
+        "timesfm-1.0-200m": {"bias_shift": 0.0, "n_observations": 0}
+      },
+      "coverage_pending": true,
+      "notes": "Cold-start initialization at round 0 iter 0. No realized outcomes available yet (no eval_result_*.json in _inbox). Identity correction (bias=0, scale=1.0) applied. First eval will populate residuals and quantile-coverage stats."
+    }
+  }
+}

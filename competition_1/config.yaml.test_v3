@@ -1,0 +1,43 @@
+# nautilus-competition-run — TEST_V3 config (Task #7 step 2 re-run with skills)
+# Live-mode smoke at 1800s budget, single team active.
+
+name: smoke_live_v2
+
+# Match demo's catalog grid (5-min bars, 2025-01-01..2025-01-04).
+# Single round, full demo span across train/test/eval/paper.
+windows:
+  - train:
+      start: "2025-01-01T00:00:00Z"
+      end:   "2025-01-02T17:40:00Z"
+    test:
+      start: "2025-01-02T17:40:00Z"
+      end:   "2025-01-03T10:20:00Z"
+    eval:
+      start: "2025-01-03T10:20:00Z"
+      end:   "2025-01-04T03:00:00Z"
+    paper:
+      start: "2025-01-04T03:00:00Z"
+      end:   "2025-01-04T11:20:00Z"
+
+paper:
+  mode: live                          # Binance Spot Testnet — real API calls
+  duration_minutes: 1                 # short live run; testnet creds auto-load
+  starting_pot_usdt: 1000.0
+
+instrument:
+  symbol: "BTCUSDT.BINANCE"
+  bar_type: "BTCUSDT.BINANCE-5-MINUTE-LAST-EXTERNAL"
+
+agent:
+  command: ["claude", "--print", "--output-format", "json"]
+  per_train_timeout_seconds: 1800     # merger needs the room
+  max_train_iterations: 1
+
+scoring:
+  weights:
+    sharpe: 0.0
+    total_return: 1.0
+    max_drawdown: 0.0
+
+catalog:
+  path: data/catalog

@@ -1,0 +1,50 @@
+# nautilus-competition-run — READY-SMOKE config (Task #8 step 2)
+# Real-data 7-team smoke. Restore from config.yaml.production.full after.
+#
+# Catalog: 8640 BTCUSDT 5-min bars, 2026-04-01..2026-05-01 UTC (real Binance).
+# Window split:
+#   train: 14 days  (2026-04-01 .. 2026-04-15)
+#   test:   7 days  (2026-04-15 .. 2026-04-22)
+#   eval:   7 days  (2026-04-22 .. 2026-04-29)  ← team strategies backtested here
+#   paper:  2 days  (2026-04-29 .. 2026-05-01)  ← live mode trims to duration_minutes
+
+name: ready_smoke
+
+# `rounds:` is forbidden by the schema (forbid_unknown_fields=True);
+# rounds are implicit in len(windows).
+windows:
+  - train:
+      start: "2026-04-01T00:00:00Z"
+      end:   "2026-04-15T00:00:00Z"
+    test:
+      start: "2026-04-15T00:00:00Z"
+      end:   "2026-04-22T00:00:00Z"
+    eval:
+      start: "2026-04-22T00:00:00Z"
+      end:   "2026-04-29T00:00:00Z"
+    paper:
+      start: "2026-04-29T00:00:00Z"
+      end:   "2026-05-01T00:00:00Z"
+
+paper:
+  mode: live                          # Binance Spot Testnet — real API calls
+  duration_minutes: 1                 # short live test
+  starting_pot_usdt: 1000.0
+
+instrument:
+  symbol: "BTCUSDT.BINANCE"
+  bar_type: "BTCUSDT.BINANCE-5-MINUTE-LAST-EXTERNAL"
+
+agent:
+  command: ["claude", "--print", "--output-format", "json"]
+  per_train_timeout_seconds: 1800     # 30 min — 1 iter is a wiring smoke, not full prod
+  max_train_iterations: 1
+
+scoring:
+  weights:
+    sharpe: 0.0
+    total_return: 1.0
+    max_drawdown: 0.0
+
+catalog:
+  path: data/catalog
