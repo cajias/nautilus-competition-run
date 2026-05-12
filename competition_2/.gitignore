@@ -1,0 +1,14 @@
+# Generated competition outputs (per-run timestamped subfolders).
+runs/
+
+# Per-team incoming/scratch files written by the harness.
+teams/*/incoming/
+
+# Uncomment to keep your seeded catalog out of git (defaults to tracked):
+# data/catalog/*.parquet
+# data/catalog/**/*.parquet
+
+# Editor / OS junk
+.DS_Store
+.idea/
+.vscode/
