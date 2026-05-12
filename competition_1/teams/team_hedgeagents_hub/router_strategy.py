@@ -1,28 +1,47 @@
 """
-RouterStrategy — team_hedgeagents_hub, round 0 / iter 0.
+RouterStrategy — team_hedgeagents_hub, round 0 / iter 3.
 
-Hub-and-spoke merger of three inline sub-signals:
-  - spot:   EMA(12) > EMA(48) crossover momentum       w=0.60  cap=0.50
-  - perps:  z-score(20) mean-reversion + vol gate       w=0.25  cap=0.30
-  - basis:  BollingerBands(20) + ATR(14) mean-revert    w=0.15  cap=0.20
+Hub-and-spoke merger of two inline sub-signals (perps DROPPED per iter-2 PIVOT_DECISION):
 
-Budget weights from conferences/budget/0_0.md (APPROVED).
-Per-spoke virtual positions track _v_spot/_v_perps/_v_basis in [0, max_pos_pct].
-One net MARKET order per bar via instrument.make_qty() — precision-safe.
-No look-ahead: signals use only prev_* state, never current bar.close directly.
+  - spot:   regime_switching_ema_atr_gated                        w=0.72  cap=0.55
+             EMA(12)/EMA(48) golden-cross long entry, only in trending regime
+             (atr_pct >= 0.0018). Slow-EMA slope gate retained. Counter-trend exit
+             (close < fast_ema), death-cross exit, 288-bar timeout.
+             target_spot=0.50 internal fraction.
+
+  - perps:  DROPPED per iter-2 PIVOT_DECISION.                    w=0.00  cap=0.00
+             _perps_on_bar is an inert no-op. Placeholder retained for forensic
+             continuity and one-line re-instatement if a real perp instrument is added.
+
+  - basis:  BollingerBands(20,2) + ATR(14) LOW-vol gate           w=0.28  cap=0.22
+             + EMA-spread filter (ema_fast < ema_slow, one-sided).
+             Entry on close <= lower BB in LOW-vol quiet regime.
+             Exit: bb_mid revert → gain_target 1.008x → 12-bar timeout.
+             Python-level 1% stop included as belt-and-suspenders signal layer;
+             RiskEngine stop_loss_pct=0.010 is the hard veto.
+             Internal max_position_pct=0.20 (2pp below RiskEngine cap of 0.22).
+             target_basis=0.70 internal fraction.
+
+Budget weights from conferences/budget/0_3.md (APPROVED, round 0 iter 3).
+Binding PIVOT_DECISION from conferences/extreme_market/0_2.md.
+
+Architecture: per-spoke handlers each submit independent MarketOrders.
+Each spoke tracks its own position qty.
+All indicators registered via register_indicator_for_bars for automatic
+Nautilus-driven updates — no manual handle_bar() calls inside handlers.
 
 References:
-  HedgeAgents, Li et al., WWW 2025 — arXiv:2502.13165
-  Fast Trading on Binance with NautilusTrader — §2, §7.7
+  HedgeAgents, Li et al., WWW 2025 — arXiv:2502.13165 §B (no look-ahead), §C (hub-and-spoke)
+  Fast Trading on Binance with NautilusTrader — §2, §7.7 (multi-subaccount pattern)
+  conferences/budget/0_3.md — APPROVED (w_spot=0.72, w_perps=0.00, w_basis=0.28)
+  conferences/extreme_market/0_2.md — PIVOT_DECISION (drop_spoke=perps, spot class upgrade,
+    revert_basis_overrides)
+  spokes/_merge_log.md — full deviation log (round 0 iter 3 entry)
 """
 
 from __future__ import annotations
 
-import math
-from collections import deque
 from typing import Optional
-
-import numpy as np
 
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.indicators import AverageTrueRange, BollingerBands, ExponentialMovingAverage
@@ -39,50 +58,64 @@ from nautilus_trader.trading.strategy import Strategy
 
 class RouterStrategyConfig(StrategyConfig, frozen=True):
     """
-    Configuration for the hedgeagents hub-and-spoke RouterStrategy.
+    Configuration for the hedgeagents hub-and-spoke RouterStrategy (iter 3).
 
     instrument_id and bar_type are REQUIRED — entry.py passes them as typed
-    objects from harness config.
+    objects from harness config. No defaults for these two fields.
+
+    Budget weights and per-spoke caps sourced from:
+      conferences/budget/0_3.md (APPROVED, round 0 iter 3)
+      conferences/extreme_market/0_2.md (binding PIVOT_DECISION)
+
+    Per-spoke caps are surfaced here so downstream RiskEngine wiring can
+    read them directly from the config. The actual enforcement lives in
+    entry.py / RiskEngineConfig — NOT in on_bar Python branches.
     """
 
     instrument_id: InstrumentId
     bar_type: BarType
 
-    # --- Budget weights (sum=1.0) from conferences/budget/0_0.md -------------
-    w_spot: float = 0.60
-    w_perps: float = 0.25
-    w_basis: float = 0.15
+    # --- Equity fallback (used when portfolio account balance unavailable) ---
+    starting_equity: float = 1000.0
 
-    # --- Per-spoke risk caps (from budget conference, hard rule) --------------
-    spot_max_pos_pct: float = 0.50
-    spot_stop_loss_pct: float = 0.02
+    # --- Budget weights (sum=1.0) from conferences/budget/0_3.md ------------
+    w_spot: float = 0.72
+    w_perps: float = 0.00   # DROPPED per iter-2 PIVOT_DECISION
+    w_basis: float = 0.28
 
-    perps_max_pos_pct: float = 0.30
-    perps_stop_loss_pct: float = 0.015
+    # Weight sum validation (informational; enforced by design)
+    # 0.72 + 0.00 + 0.28 = 1.00 — CONFORMING
 
-    basis_max_pos_pct: float = 0.20
-    basis_stop_loss_pct: float = 0.01
+    # --- Per-spoke risk caps (from budget conference; RiskEngine is hard veto) ---
+    spot_max_position_pct: float = 0.55
+    spot_stop_loss_pct: float = 0.018
 
-    # --- Spot sub-signal parameters ------------------------------------------
-    spot_fast_period: int = 12    # 1h on 5-min bars
-    spot_slow_period: int = 48    # 4h on 5-min bars
-    spot_max_bars: int = 288      # 24h stale-long guard
+    perps_max_position_pct: float = 0.00   # defense-in-depth for the dropped spoke
+    perps_stop_loss_pct: float = 0.000
+    perps_max_leverage: float = 1.0
 
-    # --- Perps sub-signal parameters (z-score mean-reversion + vol gate) -----
-    perps_z_window: int = 20
-    perps_z_entry: float = 1.8    # spoke value: |z| > 1.8 triggers long fade
-    perps_z_exit: float = 0.0     # spoke value: z >= 0 → exit (mean reverted)
-    perps_vol_threshold: float = 0.0013  # realized-vol gate per bar (~30% ann)
-    perps_time_stop_bars: int = 12       # ~60 min max hold
+    basis_max_position_pct: float = 0.22
+    basis_stop_loss_pct: float = 0.010
 
-    # --- Basis sub-signal parameters (BollingerBands + ATR vol gate) ----------
+    # --- Spot sub-signal parameters (regime_switching_ema_atr_gated) ---------
+    spot_fast_period: int = 12      # ~1h on 5-min bars
+    spot_slow_period: int = 48      # ~4h on 5-min bars
+    spot_atr_period: int = 14       # Wilder ATR(14)
+    spot_atr_threshold: float = 0.0018   # trending regime gate (>= enters)
+    spot_target_pct: float = 0.50   # internal fraction: w_spot * target_spot = 0.36
+    spot_max_bars: int = 288        # 24h stale-long guard (5-min bars)
+
+    # --- Basis sub-signal parameters -----------------------------------------
     basis_bb_period: int = 20
     basis_bb_k: float = 2.0
     basis_atr_period: int = 14
-    basis_atr_pct_threshold: float = 0.005   # 0.5% of price → high-vol skip
-
-    # --- Order dust threshold -------------------------------------------------
-    dust_threshold_btc: float = 0.001
+    basis_atr_threshold: float = 0.005  # LOW-vol gate: entry when atr_pct < 0.005
+    basis_ema_fast_period: int = 12
+    basis_ema_slow_period: int = 48
+    basis_gain_target: float = 1.008    # 1.008x entry price (restored from iter-1)
+    basis_max_bars: int = 12            # 60-min timeout (12 × 5-min bars)
+    basis_internal_pos_pct: float = 0.20  # internal cap; 2pp below RiskEngine cap 0.22
+    basis_target_pct: float = 0.70      # internal fraction: w_basis * target_basis = 0.196
 
 
 # ---------------------------------------------------------------------------
@@ -91,56 +124,59 @@ class RouterStrategyConfig(StrategyConfig, frozen=True):
 
 class RouterStrategy(Strategy):
     """
-    Single Nautilus Strategy that inlines three spoke sub-signals and routes
-    capital according to budget weights from the approved budget conference.
+    Single Nautilus Strategy that inlines two active spoke sub-signals
+    (perps spoke dropped per iter-2 PIVOT_DECISION, retained as inert placeholder).
 
-    Virtual positions:
-      _v_spot, _v_perps, _v_basis  each in [0.0, *_max_pos_pct]
+    Each active spoke handler (_spot_on_bar, _basis_on_bar) manages its own
+    position state and submits independent MarketOrders. _perps_on_bar is an
+    inert no-op that immediately returns.
 
-    Net target = clamp(w_spot*_v_spot + w_perps*_v_perps + w_basis*_v_basis, 0, 1)
-    One net MARKET order per bar when |delta_btc| > dust_threshold_btc.
+    Spoke sizing (effective equity fractions when both simultaneously long):
+        spot:  w_spot * target_spot  = 0.72 * 0.50 = 0.360
+        basis: w_basis * target_basis = 0.28 * 0.70 = 0.196
+        perps: 0.00 (dropped)
+        Total target: ~0.556 — bounded by RiskEngine caps
+          spot cap: 0.55, basis cap: 0.22, combined ceiling: 0.458
 
-    All signals operate on confirmed closed bars only (no look-ahead per
-    AI Agents... §B). Indicators are registered for automatic Nautilus updates.
+    All signals use confirmed closed bars only (no look-ahead, AI Agents §B).
+    Indicators registered via register_indicator_for_bars — Nautilus drives updates
+    automatically. No manual handle_bar() calls inside spoke handlers.
     """
 
     def __init__(self, config: RouterStrategyConfig) -> None:
         super().__init__(config)
 
-        # ---- Nautilus indicators ---- (registered in on_start)
-        self._spot_fast = ExponentialMovingAverage(config.spot_fast_period)
-        self._spot_slow = ExponentialMovingAverage(config.spot_slow_period)
-        self._basis_bb = BollingerBands(config.basis_bb_period, config.basis_bb_k)
-        self._basis_atr = AverageTrueRange(config.basis_atr_period)
+        cfg = config
 
-        # ---- Perps: manual rolling deque (no Nautilus indicator for realized vol)
-        _perps_maxlen = config.perps_z_window + 2
-        self._perps_closes: deque[float] = deque(maxlen=_perps_maxlen)
-        self._perps_prev_close: Optional[float] = None
+        # ---- Spot indicators (registered in on_start) ----
+        # Separate instances from basis indicators (both 12/48 but independent objects)
+        self._spot_fast_ema = ExponentialMovingAverage(cfg.spot_fast_period)
+        self._spot_slow_ema = ExponentialMovingAverage(cfg.spot_slow_period)
+        self._spot_atr = AverageTrueRange(cfg.spot_atr_period)
 
-        # ---- One-bar-lag cache for spot EMA crossing detection ----
+        # ---- Spot: lag scalars for crossover and slope gate (written end-of-bar) ----
         self._spot_prev_fast: Optional[float] = None
         self._spot_prev_slow: Optional[float] = None
 
-        # ---- Per-spoke virtual position fractions ----
-        self._v_spot: float = 0.0    # in [0.0, spot_max_pos_pct]
-        self._v_perps: float = 0.0   # in [0.0, perps_max_pos_pct]
-        self._v_basis: float = 0.0   # in [0.0, basis_max_pos_pct]
-
-        # ---- Spoke state ----
-        # Spot
+        # ---- Spot: position state ----
+        self._spot_pos_qty: float = 0.0
         self._spot_entry_price: Optional[float] = None
         self._spot_bars_held: int = 0
 
-        # Perps
-        self._perps_entry_price: Optional[float] = None
-        self._perps_bars_held: int = 0
+        # ---- Basis indicators (registered in on_start) ----
+        # Separate EMA instances from spot — both 12/48 but driven independently
+        self._basis_bb = BollingerBands(cfg.basis_bb_period, cfg.basis_bb_k)
+        self._basis_atr = AverageTrueRange(cfg.basis_atr_period)
+        self._basis_ema_fast = ExponentialMovingAverage(cfg.basis_ema_fast_period)
+        self._basis_ema_slow = ExponentialMovingAverage(cfg.basis_ema_slow_period)
 
-        # Basis
+        # ---- Basis: position state ----
+        self._basis_pos_qty: float = 0.0
         self._basis_entry_price: Optional[float] = None
+        self._basis_bars_held: int = 0
 
-        # ---- Net position tracking ----
-        self._current_btc: float = 0.0
+        # ---- Instrument (set in on_start) ----
+        self.instrument = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -149,199 +185,343 @@ class RouterStrategy(Strategy):
     def on_start(self) -> None:
         self.instrument = self.cache.instrument(self.config.instrument_id)
         if self.instrument is None:
-            self.log.error(f"[ROUTER] Instrument {self.config.instrument_id} not in cache.")
+            self.log.error(
+                f"[ROUTER] Instrument {self.config.instrument_id} not in cache."
+            )
             return
-        # Register indicators for automatic bar-driven updates
-        self.register_indicator_for_bars(self.config.bar_type, self._spot_fast)
-        self.register_indicator_for_bars(self.config.bar_type, self._spot_slow)
-        self.register_indicator_for_bars(self.config.bar_type, self._basis_bb)
-        self.register_indicator_for_bars(self.config.bar_type, self._basis_atr)
-        self.subscribe_bars(self.config.bar_type)
 
-    # on_stop deliberately does NOT flatten — harness handles round closure.
+        bar_type = self.config.bar_type
+
+        # Spot indicators — Nautilus feeds these automatically on each closed bar
+        self.register_indicator_for_bars(bar_type, self._spot_fast_ema)
+        self.register_indicator_for_bars(bar_type, self._spot_slow_ema)
+        self.register_indicator_for_bars(bar_type, self._spot_atr)
+
+        # Basis indicators — separate registrations from spot
+        self.register_indicator_for_bars(bar_type, self._basis_bb)
+        self.register_indicator_for_bars(bar_type, self._basis_atr)
+        self.register_indicator_for_bars(bar_type, self._basis_ema_fast)
+        self.register_indicator_for_bars(bar_type, self._basis_ema_slow)
+
+        self.subscribe_bars(bar_type)
+
+    # on_stop intentionally does not flatten — harness owns round closure.
 
     # ------------------------------------------------------------------
     # Main bar handler
     # ------------------------------------------------------------------
 
     def on_bar(self, bar: Bar) -> None:
-        close = float(bar.close)
-        high = float(bar.high)
-        low = float(bar.low)
-
-        # 1. Update spoke sub-signals (modifies _v_spot/_v_perps/_v_basis in place)
-        self._update_spot(close)
-        self._update_perps(close)
-        self._update_basis(close, high, low)
-
-        # 2. Weighted composite (clamped per-spoke BEFORE weighting)
-        cfg = self.config
-        v_s = max(0.0, min(self._v_spot,  cfg.spot_max_pos_pct))
-        v_p = max(0.0, min(self._v_perps, cfg.perps_max_pos_pct))
-        v_b = max(0.0, min(self._v_basis, cfg.basis_max_pos_pct))
-
-        combined = cfg.w_spot * v_s + cfg.w_perps * v_p + cfg.w_basis * v_b
-        combined = max(0.0, min(combined, 1.0))
-
-        # 3. Net order
-        self._rebalance(combined, close)
-
-    # ------------------------------------------------------------------
-    # Spoke sub-signal: SPOT — EMA(12)/EMA(48) crossover
-    # One-bar lag on EMA values to detect crossings without look-ahead.
-    # ------------------------------------------------------------------
-
-    def _update_spot(self, close: float) -> None:
-        cfg = self.config
-
-        if not (self._spot_fast.initialized and self._spot_slow.initialized):
+        if self.instrument is None:
             return
 
-        fast = self._spot_fast.value
-        slow = self._spot_slow.value
+        # Dispatch to per-spoke handlers. Each handler manages its own warm-up.
+        self._spot_on_bar(bar)
+        self._perps_on_bar(bar)   # inert no-op — see method docstring
+        self._basis_on_bar(bar)
 
-        # One-bar crossing detection using lagged EMA values
-        if self._spot_prev_fast is not None and self._spot_prev_slow is not None:
-            crossed_up = (self._spot_prev_fast <= self._spot_prev_slow) and (fast > slow)
-            crossed_dn = (self._spot_prev_fast >= self._spot_prev_slow) and (fast < slow)
-
-            # Stop-loss check (highest priority)
-            if self._spot_entry_price is not None:
-                if close <= self._spot_entry_price * (1.0 - cfg.spot_stop_loss_pct):
-                    self._v_spot = 0.0
-                    self._spot_entry_price = None
-                    self._spot_bars_held = 0
-                    self._spot_prev_fast = fast
-                    self._spot_prev_slow = slow
-                    return
-
-            # Stale-long guard
-            if self._spot_entry_price is not None:
-                self._spot_bars_held += 1
-                if self._spot_bars_held >= cfg.spot_max_bars:
-                    self._v_spot = 0.0
-                    self._spot_entry_price = None
-                    self._spot_bars_held = 0
-                    self._spot_prev_fast = fast
-                    self._spot_prev_slow = slow
-                    return
-
-            # Signal: bullish crossover → enter; bearish → exit
-            if crossed_up and self._spot_entry_price is None:
-                self._spot_entry_price = close
-                self._spot_bars_held = 0
-                self._v_spot = cfg.spot_max_pos_pct
-            elif crossed_dn and self._spot_entry_price is not None:
-                self._v_spot = 0.0
-                self._spot_entry_price = None
-                self._spot_bars_held = 0
-
-        self._spot_prev_fast = fast
-        self._spot_prev_slow = slow
+        # Update spot lag scalars AFTER all spoke logic has run (no look-ahead).
+        # Written at END of bar so they reflect the just-closed bar values,
+        # available as "previous bar" lags on the NEXT on_bar call.
+        if self._spot_fast_ema.initialized:
+            self._spot_prev_fast = self._spot_fast_ema.value
+        if self._spot_slow_ema.initialized:
+            self._spot_prev_slow = self._spot_slow_ema.value
 
     # ------------------------------------------------------------------
-    # Spoke sub-signal: PERPS — realized-vol-gated z-score mean-reversion
-    # Uses prev_close buffer to ensure no look-ahead.
+    # Spoke handler: SPOT
+    # Class: regime_switching_ema_atr_gated
+    # Authorized by conferences/extreme_market/0_2.md PIVOT_DECISION
+    #   (new_class_for_spot: regime_switching_ema_atr_gated).
+    #
+    # Regime gate (computed on completed bars, no look-ahead, AI Agents §B):
+    #   atr_pct = ATR(14) / close
+    #   Trending regime: atr_pct >= 0.0018 → entry admitted on golden cross
+    #   Chop regime: atr_pct < 0.0018 → NO new entries; exits/stops continue
+    #
+    # EMA pair: EMA(12) fast / EMA(48) slow
+    # Entry: golden cross (prev_fast <= prev_slow AND fast > slow)
+    #        + slow-EMA slope gate (slow > prev_slow)
+    #        + in trending regime
+    # Exits (regime-independent):
+    #   counter-trend: close < fast_ema
+    #   death-cross: prev_fast >= prev_slow AND fast < slow
+    #   timeout: 288 bars (24h on 5-min bars)
+    # Stop-loss: delegated entirely to RiskEngine (stop_loss_pct=0.018)
+    # Long-only. Position qty tracked in _spot_pos_qty.
     # ------------------------------------------------------------------
 
-    def _update_perps(self, close: float) -> None:
-        cfg = self.config
-
-        # Push previous close into the rolling deque (not current bar's close)
-        if self._perps_prev_close is not None:
-            self._perps_closes.append(self._perps_prev_close)
-        self._perps_prev_close = close  # stored for NEXT bar's use
-
-        if len(self._perps_closes) < cfg.perps_z_window:
-            return  # warm-up
-
-        window = list(self._perps_closes)[-cfg.perps_z_window:]
-        mean = float(np.mean(window))
-        std = float(np.std(window))
-        if std == 0.0:
+    def _spot_on_bar(self, bar: Bar) -> None:
+        # Guard: all spot indicators must be initialized before any trade logic.
+        if (
+            not self._spot_fast_ema.initialized
+            or not self._spot_slow_ema.initialized
+            or not self._spot_atr.initialized
+        ):
             return
 
-        log_rets = np.diff(np.log(window))
-        realized_vol = float(np.std(log_rets)) if len(log_rets) > 1 else 0.0
+        cfg = self.config
+        close = bar.close.as_double()
+        fast = self._spot_fast_ema.value   # reflects just-closed bar (Nautilus-registered)
+        slow = self._spot_slow_ema.value   # reflects just-closed bar
+        atr_val = self._spot_atr.value     # ATR(14) — last 14 closed bars including current
+        atr_pct = atr_val / close if close > 0 else 0.0
 
-        prev_close = window[-1]  # most recent confirmed close
-        z = (prev_close - mean) / std
+        # Regime classification (ATR window = last 14 closed bars; current bar IS included
+        # because Nautilus EXTERNAL bar events fire only after bar is fully closed).
+        # Assertion: no future bar is accessed. Compliant with arXiv:2502.13165 §B.
+        trending_regime = atr_pct >= cfg.spot_atr_threshold  # >= 0.0018
 
-        # In-position risk management
-        if self._perps_entry_price is not None:
-            self._perps_bars_held += 1
+        # Lag scalars from previous on_bar call — written at END of previous bar.
+        prev_fast = self._spot_prev_fast
+        prev_slow = self._spot_prev_slow
 
-            # Hard stop-loss
-            if prev_close < self._perps_entry_price * (1.0 - cfg.perps_stop_loss_pct):
-                self._v_perps = 0.0
-                self._perps_entry_price = None
-                self._perps_bars_held = 0
+        # --- In-position management (exits fire regardless of current regime) ---
+        if self._spot_pos_qty > 0.0:
+            self._spot_bars_held += 1
+
+            # Stop-loss: fully delegated to RiskEngine (stop_loss_pct=0.018).
+            # Do NOT re-implement here — RiskEngine is the hard veto (CLAUDE.md Hard Rules §1).
+
+            # Priority 1: counter-trend exit — close breaks below fast EMA
+            if close < fast:
+                self._spot_exit(close, "spot_counter_trend")
                 return
 
-            # Time stop
-            if self._perps_bars_held >= cfg.perps_time_stop_bars:
-                self._v_perps = 0.0
-                self._perps_entry_price = None
-                self._perps_bars_held = 0
+            # Priority 2: death-cross exit (uses lagged values to avoid look-ahead)
+            if (
+                prev_fast is not None
+                and prev_slow is not None
+                and prev_fast >= prev_slow
+                and fast < slow
+            ):
+                self._spot_exit(close, "spot_death_cross")
                 return
 
-            # Mean-reversion exit: z has reverted to or above mean
-            if z >= cfg.perps_z_exit:
-                self._v_perps = 0.0
-                self._perps_entry_price = None
-                self._perps_bars_held = 0
+            # Priority 3: stale-long timeout (288 bars = 24h on 5-min bars)
+            if self._spot_bars_held >= cfg.spot_max_bars:
+                self._spot_exit(close, "spot_timeout")
                 return
 
-            # Still holding long fade — maintain virtual position
-            return
+            return  # still holding
 
-        # Entry: oversold (z < -threshold) AND vol regime is active
-        if realized_vol > cfg.perps_vol_threshold and z < -cfg.perps_z_entry:
-            self._perps_entry_price = prev_close
-            self._perps_bars_held = 0
-            self._v_perps = cfg.perps_max_pos_pct
+        # --- Entry logic (flat only, trending regime only) ---
+        if self._spot_pos_qty == 0.0 and trending_regime:
+            if prev_fast is None or prev_slow is None:
+                return
 
-    # ------------------------------------------------------------------
-    # Spoke sub-signal: BASIS — BollingerBands mean-reversion + ATR gate
-    # Indicators are Nautilus-managed (registered via on_start).
-    # Entry: close <= lower_bb AND ATR/close < atr_pct_threshold (quiet regime).
-    # Exit:  close >= middle_bb OR stop-loss.
-    # ------------------------------------------------------------------
+            # Golden cross: previous bar had fast <= slow; this bar fast > slow
+            golden_cross = (prev_fast <= prev_slow and fast > slow)
 
-    def _update_basis(self, close: float, high: float, low: float) -> None:
+            # Slope gate: slow EMA must be rising (1-bar comparison; arXiv:2502.13165 §B)
+            slope_ok = (prev_slow is not None and slow > prev_slow)
+
+            if golden_cross and slope_ok:
+                self._spot_enter(close)
+
+    def _spot_enter(self, price: float) -> None:
         cfg = self.config
-
-        if not (self._basis_bb.initialized and self._basis_atr.initialized):
+        equity = self._get_equity()
+        # Effective notional: equity * w_spot * target_spot = equity * 0.72 * 0.50
+        target_notional = equity * cfg.w_spot * cfg.spot_target_pct
+        # RiskEngine hard cap: max_position_pct=0.55 — additional safety clamp
+        capped_notional = min(target_notional, equity * cfg.spot_max_position_pct)
+        qty_raw = capped_notional / price
+        qty = self.instrument.make_qty(qty_raw)  # MANDATORY — never Quantity.from_str()
+        if float(qty) <= 0:
             return
+        order = self.order_factory.market(
+            instrument_id=self.config.instrument_id,
+            order_side=OrderSide.BUY,
+            quantity=qty,
+            time_in_force=TimeInForce.GTC,
+        )
+        self.submit_order(order)
+        self._spot_pos_qty = float(qty)
+        self._spot_entry_price = price
+        self._spot_bars_held = 0
+
+    def _spot_exit(self, price: float, reason: str) -> None:
+        if self._spot_pos_qty <= 0.0:
+            return
+        qty = self.instrument.make_qty(self._spot_pos_qty)
+        if float(qty) <= 0:
+            self._spot_pos_qty = 0.0
+            self._spot_entry_price = None
+            self._spot_bars_held = 0
+            return
+        order = self.order_factory.market(
+            instrument_id=self.config.instrument_id,
+            order_side=OrderSide.SELL,
+            quantity=qty,
+            time_in_force=TimeInForce.GTC,
+        )
+        self.submit_order(order)
+        self._spot_pos_qty = 0.0
+        self._spot_entry_price = None
+        self._spot_bars_held = 0
+
+    # ------------------------------------------------------------------
+    # Spoke handler: PERPS — INERT NO-OP
+    #
+    # DROPPED per iter-2 PIVOT_DECISION (conferences/extreme_market/0_2.md).
+    # drop_spoke=perps; w_perps=0.00; perps_max_position_pct=0.00.
+    #
+    # Placeholder retained for:
+    #   (a) forensic continuity — on_bar dispatch contract preserved
+    #   (b) one-line re-instatement if a real perp instrument is added in
+    #       a future round
+    #
+    # CONTRACT: This method MUST emit zero orders, touch zero state, and
+    # compute nothing. It returns immediately. Any non-return code path
+    # in this method is a protocol violation.
+    # ------------------------------------------------------------------
+
+    def _perps_on_bar(self, bar: Bar) -> None:
+        """
+        Perps spoke dropped at iter-2 extreme-market conference.
+        Placeholder retained for forensic continuity and re-instatement
+        if a real perp instrument is added. No-op.
+        """
+        return  # DROPPED per iter-2 PIVOT_DECISION; placeholder for forensic continuity.
+
+    # ------------------------------------------------------------------
+    # Spoke handler: BASIS
+    # BollingerBands(20,2) + ATR(14) LOW-vol gate + EMA-spread filter.
+    #
+    # Entry gate (authoritative per chair re-ruling, budget/0_3.md §(g)):
+    #   LOW-vol: atr_pct < 0.005  (NOT high-vol; override reverted per PIVOT_DECISION)
+    #   EMA-spread: ema_fast < ema_slow  (one-sided; symmetric override reverted)
+    #   Lower-BB touch: close <= bb_lower
+    #
+    # Exit priority (Python-level; RiskEngine 1% stop is the hard backstop):
+    #   1. bb_mid revert: close >= bb_middle
+    #   2. gain target: close >= entry_price * 1.008  (restored from 1.005 override)
+    #   3. timeout: 12 bars (60 min on 5-min bars)
+    #
+    # Python stop (close <= entry_price * 0.99): retained as belt-and-suspenders
+    # signal layer (issues market sell). RiskEngine stop_loss_pct=0.010 is the
+    # structural backstop and hard veto (CLAUDE.md Hard Rules §1).
+    # See merge_log Round 0 iter 3 for conflict surface documentation.
+    #
+    # Internal sizing: equity * w_basis * basis_internal_pos_pct = equity * 0.28 * 0.20
+    # RiskEngine cap: max_position_pct=0.22 (2pp above internal cap = headroom buffer)
+    # Long-only. Position qty tracked in _basis_pos_qty.
+    # ------------------------------------------------------------------
+
+    def _basis_on_bar(self, bar: Bar) -> None:
+        # Guard: all basis indicators must be initialized.
+        if (
+            not self._basis_bb.initialized
+            or not self._basis_atr.initialized
+            or not self._basis_ema_fast.initialized
+            or not self._basis_ema_slow.initialized
+        ):
+            return
+
+        cfg = self.config
+        close = bar.close.as_double()
+        atr_val = self._basis_atr.value
+        atr_pct = atr_val / close if close > 0 else 999.0
 
         lower_bb = self._basis_bb.lower
         middle_bb = self._basis_bb.middle
-        atr_val = self._basis_atr.value
-        atr_pct = atr_val / close if close > 0 else 999.0
-        high_vol = atr_pct > cfg.basis_atr_pct_threshold
+        ema_fast = self._basis_ema_fast.value
+        ema_slow = self._basis_ema_slow.value
 
-        # Stop-loss check (highest priority)
-        if self._basis_entry_price is not None:
-            adverse_move = (self._basis_entry_price - close) / self._basis_entry_price
-            if adverse_move >= cfg.basis_stop_loss_pct:
-                self._v_basis = 0.0
-                self._basis_entry_price = None
+        # --- In-position management ---
+        if self._basis_pos_qty > 0.0:
+            self._basis_bars_held += 1
+
+            # Python-level 1% stop (belt-and-suspenders signal layer).
+            # RiskEngine stop_loss_pct=0.010 is the hard veto and structural backstop.
+            if (
+                self._basis_entry_price is not None
+                and close <= self._basis_entry_price * (1.0 - 0.01)
+            ):
+                self._basis_exit(close, "basis_stop_loss")
                 return
 
-        # Mean-reversion exit: close reverts to middle band
-        if self._basis_entry_price is not None and close >= middle_bb:
-            self._v_basis = 0.0
-            self._basis_entry_price = None
-            return
+            # Priority 1: mean-reversion target — basis converged to BB midline
+            if close >= middle_bb:
+                self._basis_exit(close, "basis_bb_mid")
+                return
 
-        # Entry: lower band touch in quiet regime, flat only
-        if self._basis_entry_price is None and not high_vol and close <= lower_bb:
-            self._basis_entry_price = close
-            self._v_basis = cfg.basis_max_pos_pct
+            # Priority 2: gain-target take-profit — 1.008x entry price (restored from 1.005)
+            if (
+                self._basis_entry_price is not None
+                and close >= self._basis_entry_price * cfg.basis_gain_target
+            ):
+                self._basis_exit(close, "basis_gain_target")
+                return
+
+            # Priority 3: time-stop — structural divergence assumed after 60 min
+            if self._basis_bars_held >= cfg.basis_max_bars:
+                self._basis_exit(close, "basis_timeout")
+                return
+
+            return  # still holding
+
+        # --- Entry logic (flat only) ---
+        # LOW-vol gate: atr_pct < 0.005 (authoritative; HIGH-vol override reverted)
+        low_vol_active = atr_pct < cfg.basis_atr_threshold
+        # One-sided EMA filter: fast below slow (bearish/ranging; symmetric override reverted)
+        ema_filter_ok = ema_fast < ema_slow
+        # Lower-band touch: basis widening signal
+        lower_band_touch = close <= lower_bb
+
+        if (
+            self._basis_pos_qty == 0.0
+            and lower_band_touch
+            and low_vol_active
+            and ema_filter_ok
+        ):
+            self._basis_enter(close)
+
+    def _basis_enter(self, price: float) -> None:
+        cfg = self.config
+        equity = self._get_equity()
+        # Effective notional: equity * w_basis * internal_pos_pct = equity * 0.28 * 0.20
+        target_notional = equity * cfg.w_basis * cfg.basis_internal_pos_pct
+        # RiskEngine cap: max_position_pct=0.22 — safety clamp
+        capped_notional = min(target_notional, equity * cfg.basis_max_position_pct)
+        qty_raw = capped_notional / price
+        qty = self.instrument.make_qty(qty_raw)  # MANDATORY — never Quantity.from_str()
+        if float(qty) <= 0:
+            return
+        order = self.order_factory.market(
+            instrument_id=self.config.instrument_id,
+            order_side=OrderSide.BUY,
+            quantity=qty,
+            time_in_force=TimeInForce.GTC,
+        )
+        self.submit_order(order)
+        self._basis_pos_qty = float(qty)
+        self._basis_entry_price = price
+        self._basis_bars_held = 0
+
+    def _basis_exit(self, price: float, reason: str) -> None:
+        if self._basis_pos_qty <= 0.0:
+            return
+        qty = self.instrument.make_qty(self._basis_pos_qty)
+        if float(qty) <= 0:
+            self._basis_pos_qty = 0.0
+            self._basis_entry_price = None
+            self._basis_bars_held = 0
+            return
+        order = self.order_factory.market(
+            instrument_id=self.config.instrument_id,
+            order_side=OrderSide.SELL,
+            quantity=qty,
+            time_in_force=TimeInForce.GTC,
+        )
+        self.submit_order(order)
+        self._basis_pos_qty = 0.0
+        self._basis_entry_price = None
+        self._basis_bars_held = 0
 
     # ------------------------------------------------------------------
-    # Order execution: net single MARKET order toward target position
-    # Uses instrument.make_qty() for precision-safe quantity.
+    # Equity helper: portfolio account balance with fallback.
     # ------------------------------------------------------------------
 
     def _get_equity(self) -> float:
@@ -350,49 +530,4 @@ class RouterStrategy(Strategy):
             account = self.portfolio.account(venue)
             return float(account.balance_total(USDT).as_double())
         except Exception:
-            return 1000.0
-
-    def _rebalance(self, target_fraction: float, price: float) -> None:
-        if price <= 0 or self.instrument is None:
-            return
-
-        equity = self._get_equity()
-        target_notional = equity * target_fraction
-        target_btc = target_notional / price
-
-        # Sync current BTC from open positions
-        try:
-            positions = self.cache.positions_open(instrument_id=self.config.instrument_id)
-            self._current_btc = sum(float(p.quantity) for p in positions)
-        except Exception:
-            pass
-
-        delta = target_btc - self._current_btc
-        abs_delta = abs(delta)
-
-        if abs_delta < self.config.dust_threshold_btc:
-            return
-
-        # Use instrument.make_qty() for catalog-precision quantity
-        qty_obj = self.instrument.make_qty(abs_delta)
-
-        if qty_obj <= 0:
-            return
-
-        if delta > 0:
-            order = self.order_factory.market(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.BUY,
-                quantity=qty_obj,
-                time_in_force=TimeInForce.GTC,
-            )
-        else:
-            order = self.order_factory.market(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.SELL,
-                quantity=qty_obj,
-                time_in_force=TimeInForce.GTC,
-            )
-
-        self.submit_order(order)
-        self._current_btc += delta  # optimistic local update
+            return self.config.starting_equity

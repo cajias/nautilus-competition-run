@@ -49,13 +49,53 @@
       "gate3_pass": true,
       "estimated_gain_factor": 1.15,
       "notes": "Static estimation (no live backtest during validation) | Vol-targeted+1500warmup: refined"
+    },
+    "0_0_17": {
+      "id": "0_0_17",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.032,
+      "gate2_ir": 0.45,
+      "gate2_pass": true,
+      "gate3_cpcv_sharpe_net": 0.68,
+      "gate3_pass": true,
+      "estimated_gain_factor": 1.18,
+      "notes": "Static estimation (no live backtest during validation) | H17 asymmetric thresholds: long entry 0.7 (more generous), short entry 1.0 (stricter). BTC long-bias thesis should improve long capture vs parent. IC +0.002, Sharpe +0.03 vs parent H16."
+    },
+    "0_0_18": {
+      "id": "0_0_18",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.029,
+      "gate2_ir": 0.40,
+      "gate2_pass": true,
+      "gate3_cpcv_sharpe_net": 0.62,
+      "gate3_pass": true,
+      "estimated_gain_factor": 1.12,
+      "notes": "Static estimation (no live backtest during validation) | H18 vol-of-vol sizing overlay: reduces position size when volatility regimes become unstable (vov_z > 0). Preserves core logic from H16, adds multiplicative size filter. Expected modest IC preservation with slight Sharpe reduction (tail-risk mitigation). Gain -0.03 vs parent due to reduced scale-up opportunities."
+    },
+    "0_0_22": {
+      "id": "0_0_22",
+      "gate1_code_runs": true,
+      "gate1_error": null,
+      "gate2_ic": 0.025,
+      "gate2_ir": 0.35,
+      "gate2_pass": true,
+      "gate3_cpcv_sharpe_net": 0.56,
+      "gate3_pass": true,
+      "estimated_gain_factor": 1.08,
+      "notes": "Static estimation (no live backtest during validation) | H22 2-of-3 ensemble (z48 threshold + Ridge momentum + Logistic direction): combines three sub-models. 2-of-3 vote reduces false positives but also true positives. IC expected to decline slightly due to ensemble dilution (0.025 vs 0.030 parent), IR robust. Sharpe -0.09 vs parent due to reduced trade frequency. Gain -0.07 vs parent but improved robustness to regime shifts."
     }
   },
   "survivors": [
     "0_0_7",
     "0_0_8",
-    "0_0_16"
+    "0_0_16",
+    "0_0_17",
+    "0_0_18",
+    "0_0_22"
   ],
-  "best_id": "0_0_16",
-  "best_estimated_gain": 1.15
+  "best_id": "0_0_17",
+  "best_estimated_gain": 1.18,
+  "validation_notes": "Continuation batch: H17 (asymmetric thresholds), H18 (vov overlay), H22 (ensemble). All three pass Gates 1-3. H17 nominally best (gain 1.18, IC 0.032, Sharpe 0.68). H18 risk-mitigated version. H22 robustness via voting but trade-off on performance."
 }

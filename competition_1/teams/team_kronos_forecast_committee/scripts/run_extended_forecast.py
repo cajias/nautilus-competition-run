@@ -23,10 +23,13 @@ log = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 WORKSPACE = "/Users/rc/Projects/workspace/nautilus-competition-run"
-TEAM_DIR  = os.path.join(WORKSPACE, "teams/team_kronos_forecast_committee")
-CATALOG   = os.path.join(WORKSPACE, "data/catalog")
+TEAM_DIR  = os.path.join(WORKSPACE, "competition_1/teams/team_kronos_forecast_committee")
+CATALOG   = os.path.join(WORKSPACE, "competition_1/data/catalog")
 HMM_CACHE = os.path.join(TEAM_DIR, ".cache/kronos_hmm/0.pkl")
-OUT_PATH  = os.path.join(TEAM_DIR, "forecasts/0_0/extended.json")
+OUT_PATH  = os.path.join(TEAM_DIR, "forecasts/0_2/extended.json")
+
+ROUND     = 0
+ITER      = 2
 
 # ── HF cache ──────────────────────────────────────────────────────────────────
 os.environ.setdefault("HF_HOME", os.path.join(WORKSPACE, ".cache/hf"))
@@ -107,7 +110,7 @@ def infer_states(hmm, returns: np.ndarray) -> np.ndarray:
 
 
 def label_regime(hmm, state_idx: int) -> str:
-    """Map HMM state → human label based on mean return ordering."""
+    """Map HMM state to human label based on mean return ordering."""
     means = hmm.means_.flatten()
     order = np.argsort(means)          # ascending: bear, [chop], bull
     if hmm.n_components == 3:
@@ -179,9 +182,9 @@ def collect_quantiles(context_df: pd.DataFrame, horizon: int, sample_count: int 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     log.info("Kronos device=%s", device)
 
-    log.info("Loading NeoQuasar/Kronos-Tokenizer-base …")
+    log.info("Loading NeoQuasar/Kronos-Tokenizer-base ...")
     tokenizer = KronosTokenizer.from_pretrained("NeoQuasar/Kronos-Tokenizer-base")
-    log.info("Loading NeoQuasar/Kronos-base …")
+    log.info("Loading NeoQuasar/Kronos-base ...")
     model = Kronos.from_pretrained("NeoQuasar/Kronos-base")
 
     predictor = KronosPredictor(model, tokenizer, max_context=512, device=device)
@@ -226,26 +229,38 @@ def collect_quantiles(context_df: pd.DataFrame, horizon: int, sample_count: int 
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-def write_fallback(reason: str, last_close: float, horizon: int = 12):
-    """Write a placeholder JSON when real inference cannot run."""
+def write_fallback(reason: str, last_close: float, horizon: int = 24):
+    """Write a placeholder JSON when real inference cannot run.
+    Uses the required new schema so the blender + executor can still proceed."""
     log.warning("Writing FALLBACK forecast. Reason: %s", reason)
     rng   = np.random.default_rng(42)
     noise = rng.normal(0, last_close * 0.001, size=horizon)
     preds = (last_close + np.cumsum(noise)).tolist()
-    p10   = (last_close + np.cumsum(noise - last_close * 0.005)).tolist()
-    p90   = (last_close + np.cumsum(noise + last_close * 0.005)).tolist()
+    std   = last_close * 0.005
+    p10   = [v - std * (i + 1) ** 0.5 for i, v in enumerate(preds)]
+    p90   = [v + std * (i + 1) ** 0.5 for i, v in enumerate(preds)]
+
     out = {
-        "checkpoint":             "Kronos-base+HMM",
-        "context_bars":           0,
-        "horizon_bars":           horizon,
-        "predicted_closes":       preds,
-        "predicted_quantiles":    {"p10": p10, "p50": preds, "p90": p90},
-        "hmm_states":             3,
-        "current_regime":         "unknown",
-        "context_window_end_ts":  datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "device":                 "cpu",
-        "notes":                  f"FALLBACK (placeholder): {reason}",
-        "ts_generated":           datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "forecaster":        "kronos-extended",
+        "round":             ROUND,
+        "iter":              ITER,
+        "horizon_bars":      horizon,
+        "bar_size_minutes":  5,
+        "context_bars_used": 0,
+        "hmm_states":        3,
+        "hmm_current_state": -1,
+        "hmm_state":         -1,
+        "hmm_state_label":   "unknown",
+        "regime_label":      "unknown",
+        "last_close":        last_close,
+        "anchor_close":      last_close,
+        "point_close":       preds,
+        "quantiles":         {"p10": p10, "p50": preds, "p90": p90},
+        "hmm_filter":        False,
+        "filter_rule":       "no filter applied",
+        "notes":             f"FALLBACK: {reason}",
+        "error":             reason,
+        "ts_generated":      datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     with open(OUT_PATH, "w") as f:
@@ -255,7 +270,7 @@ def write_fallback(reason: str, last_close: float, horizon: int = 12):
 
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
-    HORIZON      = 12
+    HORIZON      = 24
     SAMPLE_COUNT = 8
     MAX_RAW_BARS = 1024   # HMM window
     MAX_CONTEXT  = 512    # Kronos-base max context
@@ -278,8 +293,8 @@ def main():
 
     # ── 3. Fit / load HMM (past states only — no leakage) ─────────────────────
     try:
-        hmm          = fit_or_load_hmm(bar_returns, cache_path=HMM_CACHE, n_components=3)
-        states       = infer_states(hmm, bar_returns)
+        hmm           = fit_or_load_hmm(bar_returns, cache_path=HMM_CACHE, n_components=3)
+        states        = infer_states(hmm, bar_returns)
         current_state = int(states[-1])
         regime_label  = label_regime(hmm, current_state)
         log.info("Current regime: state=%d label=%s", current_state, regime_label)
@@ -294,10 +309,12 @@ def main():
     # ── 4. Apply HMM filter ───────────────────────────────────────────────────
     try:
         context_df, filter_rule = apply_hmm_filter(df, states, current_state, MAX_CONTEXT)
+        hmm_filter_applied = True
     except Exception as e:
         log.warning("HMM filter failed (%s) — using last %d bars", e, MAX_CONTEXT)
-        context_df  = df.tail(MAX_CONTEXT).reset_index(drop=True)
-        filter_rule = f"Fallback: last {MAX_CONTEXT} bars (filter error: {e})"
+        context_df         = df.tail(MAX_CONTEXT).reset_index(drop=True)
+        filter_rule        = f"Fallback: last {MAX_CONTEXT} bars (filter error: {e})"
+        hmm_filter_applied = False
 
     # ── 5. Run Kronos with quantile sampling ──────────────────────────────────
     try:
@@ -307,28 +324,48 @@ def main():
         write_fallback(f"Kronos inference error: {e}", last_close=last_close, horizon=HORIZON)
         return
 
-    # ── 6. Write output JSON ──────────────────────────────────────────────────
+    # ── 6. Write output JSON (required schema) ────────────────────────────────
     notes = (
         f"HMM: GaussianHMM(n_components=3, covariance_type=diag) fit on "
         f"{len(bar_returns)} log-returns from the full training window "
         f"(no future leakage: Viterbi run on past bars only; current_regime = states[-1]). "
         f"Current regime: state={current_state} ({regime_label}). "
         f"Filter rule: {filter_rule}. "
-        f"Context bars passed to Kronos-base: {len(context_df)} (max_context=512)."
+        f"Context bars passed to Kronos-base: {len(context_df)} (max_context={MAX_CONTEXT})."
     )
 
     out = {
-        "checkpoint":             "Kronos-base+HMM",
-        "context_bars":           len(context_df),
-        "horizon_bars":           HORIZON,
-        "predicted_closes":       point,
-        "predicted_quantiles":    quantiles,
-        "hmm_states":             hmm_n_components,
-        "current_regime":         regime_label,
-        "context_window_end_ts":  context_window_end_ts,
-        "device":                 device,
-        "notes":                  notes,
-        "ts_generated":           datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        # Required schema fields (task spec)
+        "forecaster":        "kronos-extended",
+        "round":             ROUND,
+        "iter":              ITER,
+        "horizon_bars":      HORIZON,
+        "bar_size_minutes":  5,
+        "context_bars_used": len(context_df),
+        "hmm_states":        hmm_n_components,
+        # Both naming conventions for blender compatibility
+        "hmm_current_state": current_state,
+        "hmm_state":         current_state,
+        "hmm_state_label":   regime_label,
+        "regime_label":      regime_label,
+        "last_close":        last_close,
+        "anchor_close":      last_close,
+        "point_close":       point,
+        "quantiles":         quantiles,
+        "hmm_filter":        hmm_filter_applied,
+        "filter_rule":       (
+            "weight bars by regime match — emphasize bars in the same HMM state "
+            f"as current ({regime_label}). " + filter_rule
+        ),
+        # Supplemental fields for blender/debug
+        "checkpoint":        "NeoQuasar/Kronos-base",
+        "tokenizer":         "NeoQuasar/Kronos-Tokenizer-base",
+        "context_len":       512,
+        "horizon":           HORIZON,
+        "device":            device,
+        "context_window_end_ts": context_window_end_ts,
+        "notes":             notes,
+        "ts_generated":      datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
@@ -336,7 +373,7 @@ def main():
         json.dump(out, f, indent=2)
 
     log.info("SUCCESS — forecast written to %s", OUT_PATH)
-    log.info("Predicted closes (first 3): %s", point[:3])
+    log.info("point_close (first 3): %s", point[:3])
     log.info("Current regime: %s (state %d)", regime_label, current_state)
 
 

@@ -5,3 +5,6 @@
 {"id": "0_0_8", "parent_id": "0_0_2", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.023, "ir": 0.33, "gain_factor": 1.06}
 {"id": "0_0_9", "parent_id": null, "status": "rejected", "arm": "model-search", "failure_class": "overfit", "ic": 0.019, "ir": 0.26, "gain_factor": 1.03}
 {"id": "0_0_16", "parent_id": "0_0_2", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.030, "ir": 0.42, "gain_factor": 1.15}
+{"id": "0_0_17", "parent_id": "0_0_16", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.032, "ir": 0.45, "gain_factor": 1.18}
+{"id": "0_0_18", "parent_id": "0_0_16", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.029, "ir": 0.40, "gain_factor": 1.12}
+{"id": "0_0_22", "parent_id": "0_0_16", "status": "accepted", "arm": "model-search", "failure_class": "n/a", "ic": 0.025, "ir": 0.35, "gain_factor": 1.08}

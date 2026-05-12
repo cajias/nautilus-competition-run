@@ -1,17 +1,37 @@
 {
-  "global": {"lambda_decay": 0.15, "version": 2},
+  "global": {"lambda_decay": 0.15, "version": 3},
   "regimes": {
     "trending_up": {
-      "bias_shift": 0.0,
+      "bias_shift": -0.0008,
       "scale_correction": 1.0,
       "coverage_metrics": {},
-      "n_observations": 0,
+      "n_observations": 1,
       "last_updated_round": 0,
       "per_checkpoint_bias": {
-        "timesfm-1.0-200m": {"bias_shift": 0.0, "n_observations": 0}
+        "timesfm-1.0-200m": {
+          "bias_shift": -0.002,
+          "n_observations": 1,
+          "coverage_pending": true,
+          "notes": "Tentative downward bias from a single noisy outcome (iter 0 prev_gain = -0.00338). Strategy took +1.09% TimesFM-1.0 forecast at face value and lost ~0.34%; this is partial, indirect evidence (n=1) that v1 was directionally optimistic on trending_up. Magnitude held small (-0.002) per critic discipline; will decay/refine as more outcomes arrive."
+        },
+        "timesfm-2.0-500m": {
+          "bias_shift": 0.0,
+          "n_observations": 0,
+          "coverage_pending": true,
+          "notes": "Freshly registered at round 0 iter 1. v2 forecast (-1.01%) has no realized counterpart yet. Identity bias preserved; do NOT impute v1's bias onto v2 since they disagree directionally — that disagreement is the core diagnostic."
+        }
+      },
+      "forecast_dispersion": {
+        "abs_gap_pct_return": 0.021044,
+        "ensemble_midpoint_pct_return": 0.000395,
+        "sign_agreement": 0,
+        "n_checkpoints": 2,
+        "last_round": 0,
+        "last_iter": 1,
+        "interpretation": "Cross-checkpoint disagreement: v1=+1.09% vs v2=-1.01% on the same regime/window. sign_agreement=0 indicates direction conflict. Strategy-engineer SHOULD reduce position size or require classical confirmation when |abs_gap| > 0.01 (currently 0.021, ~2x that threshold)."
       },
       "coverage_pending": true,
-      "notes": "Cold-start initialization at round 0 iter 0. No realized outcomes available yet (no eval_result_*.json in _inbox). Identity correction (bias=0, scale=1.0) applied. First eval will populate residuals and quantile-coverage stats."
+      "notes": "Round 0 iter 1 refinement. Regime aggregate bias_shift set to a small -0.0008 (weighted average of v1's -0.002 with weight 1.0 and v2's 0.0 with weight 0.0, then shrunk further toward 0 by 40% since n=1 is very weak evidence). scale_correction still 1.0 — no quantile-coverage data yet (no _inbox/eval_result_*.json), and prev_gain alone cannot inform interval widths. coverage_pending remains true until n>=10 per spec. APPEND-only discipline preserved: no prior field removed."
     }
   }
 }

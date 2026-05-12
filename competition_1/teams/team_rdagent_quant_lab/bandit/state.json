@@ -1,4 +1,4 @@
 {
   "factor-mining": {"alpha": 1.0, "beta": 2.0},
-  "model-search": {"alpha": 1.0, "beta": 1.0}
+  "model-search": {"alpha": 1.165, "beta": 2.835}
 }
