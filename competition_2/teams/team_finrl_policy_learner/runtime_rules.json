@@ -1,0 +1,10 @@
+{
+  "fallback_mode": true,
+  "max_position_notional_pct": 0.6,
+  "drawdown_kill_pct": 0.15,
+  "min_warmup_bars": 65,
+  "feature_window_returns": 32,
+  "feature_window_vol": 64,
+  "momentum_short": 5,
+  "momentum_long": 60
+}

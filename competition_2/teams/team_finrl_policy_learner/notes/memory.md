@@ -1,0 +1,10 @@
+round=0 iter=0 prev_gain=None lambda=0.0010 mu=0.500 fallback=True holdout=0.0000
+round=0 iter=1 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=2 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=3 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=4 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=0 prev_gain=None lambda=0.0010 mu=0.500 fallback=True holdout=-8.3925
+round=0 iter=1 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=2 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=3 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
+round=0 iter=4 prev_gain=-0.08084967231000006 lambda=0.0030 mu=0.750 fallback=True holdout=0.0000
