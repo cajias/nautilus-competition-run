@@ -1,11 +1,11 @@
 {
   "drawdown_cap_pct": 0.15,
-  "position_size_cap_pct": 0.45,
+  "position_size_cap_pct": 0.35,
   "vol_target_annualized": 0.2,
   "regime_gate": {
-    "realized_vol_annualized_max": 1.8
+    "realized_vol_annualized_max": 4.0
   },
-  "label_horizon_bars": 12,
+  "label_horizon_bars": 3,
   "prediction_threshold_long": 0.55,
   "prediction_threshold_flat": 0.5
 }

@@ -1,13 +1,13 @@
 {
-  "disagree_threshold": 0.06,
-  "drawdown_cap": 0.2,
-  "hrp_lookback_bars": 700,
+  "disagree_threshold": 0.15,
+  "drawdown_cap": 0.25,
+  "hrp_lookback_bars": 500,
   "max_weight_per_spoke": 0.6,
   "mr_period": 20,
-  "notes": "Iter 3. prev_gain=-1.35e-4 (4th micro-loss in a row: iter0=-4.19e-5, iter1=-3.0e-04, iter2=-1.35e-04). Budget + experience-sharing fire; extreme-market does NOT (|loss| << 10pct floor, no >=1pct consecutive losses). Diagnosis carried forward from iter 2: persistent under-trading / fee-bleed on marginal trades, NOT risk overshoot \u2014 composite barely clears 0.07 gate, takes ~1 round-trip, loses the spread. Rotation pattern this run: lookback 500->200->350->700 (probing long end, prior runs explored 200..500). 700 ~ 2.4 days of 5-min bars, well under critic floor min(1000, 0.2*len(train_bars)). Pivots: (1) lookback 350->700 to test long-regime end of search per experience-sharing rotation; (2) disagree_threshold 0.07->0.06 (still >0.05 floor) to admit more medium-conviction composites \u2014 drawdown_cap=0.20 protects downside, so bleed-tolerance is acceptable for upside capture; (3) trend_period 60->80 to scale with longer lookback while keeping horizon gap vs mr_period=20 (4x ratio for HRP cluster separation); (4) mr_period=20, vol_period=30 unchanged (already orthogonal); (5) max_weight_per_spoke=0.6 held \u2014 extreme-market did not trigger; (6) drawdown_cap=0.20 held \u2014 over-indexes composite's 0.2 max_drawdown weight (team's scoring edge). Researcher JSON absent at attempts/003/research.json (subprocess timeout pattern); operating on memory-keeper trail + CLAUDE.md priors. File write to attempts/003/hub_manager.json may be blocked by harness sandbox \u2014 stdout is authoritative per CLAUDE.md contract.",
-  "trend_period": 80,
-  "vol_period": 30,
-  "w_mean_rev": 0.3875281031076343,
-  "w_trend": 0.21212180056620444,
-  "w_vol_carry": 0.40035009632616125
+  "notes": "fallback-defaults",
+  "trend_period": 50,
+  "vol_period": 20,
+  "w_mean_rev": 0.38387903857075256,
+  "w_trend": 0.181561780184921,
+  "w_vol_carry": 0.4345591812443264
 }

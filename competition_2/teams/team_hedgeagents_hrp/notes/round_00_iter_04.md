@@ -1,6 +1,6 @@
 # round 0 iter 4
 
-- prev_gain: -4.546130000004922e-06
+- prev_gain: -7.387070999997913e-05
 - lookback_bars: 500
 - disagree_threshold: 0.15
 - drawdown_cap: 0.25
