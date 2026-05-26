@@ -1,13 +1,13 @@
 {
-  "disagree_threshold": 0.12,
+  "disagree_threshold": 0.06,
   "drawdown_cap": 0.2,
-  "hrp_lookback_bars": 300,
+  "hrp_lookback_bars": 700,
   "max_weight_per_spoke": 0.6,
-  "mr_period": 25,
-  "notes": "Round 0 iter 1. prev_gain=-4.19e-05 (effectively zero \u2014 strategy likely never tripped disagree_threshold=0.15 on the 3-bar paper window, or traded flat). Budget conference + experience-sharing conference fire; extreme-market does NOT (prev_gain > -0.10, no loss streak). Per CLAUDE.md rule, rotated lookback from iter-0 value 500 \u2192 300 to keep ~1d of 5-min coverage and maintain HRP correlation stability. Relaxed disagree_threshold 0.15 \u2192 0.12 (well above 0.05 floor) so composite signal becomes actionable more often; iter-0 setting was likely too restrictive. trend_period scaled 100 \u2192 80; mr/vol dropped 30 \u2192 25 symmetrically. max_weight_per_spoke=0.6 unchanged \u2014 iter-0 weights (0.186/0.343/0.471) were already well-diversified. drawdown_cap=0.20 unchanged, aligned with composite's 0.2 max_drawdown weight. NOTE: researcher's attempts/001/research.json is missing (subprocess likely timed out again) \u2014 operating on iter-0 memory-keeper notes only. If iter-2 still near-zero after rotation, extreme-market conference should zero the weakest spoke.",
+  "mr_period": 20,
+  "notes": "Iter 3. prev_gain=-1.35e-4 (4th micro-loss in a row: iter0=-4.19e-5, iter1=-3.0e-04, iter2=-1.35e-04). Budget + experience-sharing fire; extreme-market does NOT (|loss| << 10pct floor, no >=1pct consecutive losses). Diagnosis carried forward from iter 2: persistent under-trading / fee-bleed on marginal trades, NOT risk overshoot \u2014 composite barely clears 0.07 gate, takes ~1 round-trip, loses the spread. Rotation pattern this run: lookback 500->200->350->700 (probing long end, prior runs explored 200..500). 700 ~ 2.4 days of 5-min bars, well under critic floor min(1000, 0.2*len(train_bars)). Pivots: (1) lookback 350->700 to test long-regime end of search per experience-sharing rotation; (2) disagree_threshold 0.07->0.06 (still >0.05 floor) to admit more medium-conviction composites \u2014 drawdown_cap=0.20 protects downside, so bleed-tolerance is acceptable for upside capture; (3) trend_period 60->80 to scale with longer lookback while keeping horizon gap vs mr_period=20 (4x ratio for HRP cluster separation); (4) mr_period=20, vol_period=30 unchanged (already orthogonal); (5) max_weight_per_spoke=0.6 held \u2014 extreme-market did not trigger; (6) drawdown_cap=0.20 held \u2014 over-indexes composite's 0.2 max_drawdown weight (team's scoring edge). Researcher JSON absent at attempts/003/research.json (subprocess timeout pattern); operating on memory-keeper trail + CLAUDE.md priors. File write to attempts/003/hub_manager.json may be blocked by harness sandbox \u2014 stdout is authoritative per CLAUDE.md contract.",
   "trend_period": 80,
-  "vol_period": 25,
-  "w_mean_rev": 0.16419502454554494,
-  "w_trend": 0.44512838898366536,
-  "w_vol_carry": 0.3906765864707897
+  "vol_period": 30,
+  "w_mean_rev": 0.3875281031076343,
+  "w_trend": 0.21212180056620444,
+  "w_vol_carry": 0.40035009632616125
 }
