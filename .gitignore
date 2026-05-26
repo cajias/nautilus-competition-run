@@ -62,3 +62,6 @@ __pycache__/
 
 # APM dependencies (workspace-shared)
 apm_modules/
+
+# remember plugin runtime state (per-workspace logs/tmp; create via session-start hook)
+.remember/
