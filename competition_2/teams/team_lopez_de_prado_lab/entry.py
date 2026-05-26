@@ -458,18 +458,39 @@ def _researcher(ctx: Any, artifacts: _Artifacts, memory: dict[str, Any]) -> str:
     )
 
     try:
-        from nautilus_competition.agent_runner import run_claude  # type: ignore
+        from nautilus_competition.agent_runner import run_researcher  # type: ignore
 
-        timeout_s = min(180, int(getattr(ctx.config.agent, "per_train_timeout_seconds", 600)) // 3)
-        result = run_claude(
+        # The framework helper enforces a 420s floor. We pass the team's
+        # natural budget and let the helper raise it if needed.
+        timeout_s = min(420, int(getattr(ctx.config.agent, "per_train_timeout_seconds", 600)) // 3)
+        command = list(
+            getattr(
+                ctx.config.agent,
+                "command",
+                ["claude", "--print", "--output-format", "json"],
+            )
+        )
+        result = run_researcher(
             workspace_dir=TEAM_DIR,
             prompt=prompt,
-            command=list(getattr(ctx.config.agent, "command", ["claude", "--print", "--output-format", "json"])),
             timeout_seconds=timeout_s,
+            command=command,
+            fail_loud=False,
         )
-        if result.returncode == 0 and not artifacts.research_md.exists():
-            # subprocess may have printed the answer rather than writing — capture it.
-            artifacts.research_md.write_text(result.stdout[:8000])
+        # The researcher writes its own markdown, but if the subprocess only
+        # printed inline, capture the unwrapped text so the fallback path has
+        # something forensic to read.
+        if not artifacts.research_md.exists() and result.raw_stdout:
+            # Prefer the unwrapped envelope text when present; fall back to raw stdout.
+            captured = result.raw_stdout
+            if result.unwrapped_envelope:
+                # Re-unwrap so we don't persist the noisy Bedrock envelope itself.
+                from nautilus_competition.researcher_helpers import (  # type: ignore
+                    _unwrap_bedrock_envelope,
+                )
+
+                captured, _ = _unwrap_bedrock_envelope(result.raw_stdout)
+            artifacts.research_md.write_text(captured[:8000])
     except Exception as exc:  # noqa: BLE001
         logger.warning(f"researcher subprocess failed, using fallback: {exc}")
 

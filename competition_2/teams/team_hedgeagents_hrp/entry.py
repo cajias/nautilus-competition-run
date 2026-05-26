@@ -33,9 +33,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nautilus_competition.agent_runner import (  # type: ignore[import-untyped]
-    AgentError,
-    AgentTimeoutError,
-    run_claude,
+    ResearcherResult,
+    run_researcher,
 )
 from nautilus_trader.config import StrategyConfig  # type: ignore[import-untyped]
 from nautilus_trader.model.data import Bar, BarType  # type: ignore[import-untyped]
@@ -733,27 +732,22 @@ def _safe_run_claude(
     prompt: str,
     timeout_seconds: int,
     label: str,
-) -> str:
-    """Wrap ``run_claude`` so a timeout / error does not crash ``train()``.
+) -> ResearcherResult:
+    """Wrap ``run_researcher`` so a timeout / error does not crash ``train()``.
 
-    Returns the subprocess stdout (possibly empty) and NEVER raises.
-    This is the budget-discipline guardrail: a single LLM failure must
-    not cost the team the whole round.
+    Returns a :class:`ResearcherResult` (possibly with empty ``payload``) and
+    NEVER raises. This is the budget-discipline guardrail: a single LLM
+    failure must not cost the team the whole round. The framework helper
+    handles Bedrock-envelope unwrap and fenced-JSON parsing internally; in
+    the rare case the team needs the raw stdout for legacy disk-fallback
+    parsing, the result also exposes ``raw_stdout``.
     """
-    try:
-        result = run_claude(
-            workspace_dir=workspace_dir,
-            prompt=prompt,
-            command=["claude", "--print", "--output-format", "json"],
-            timeout_seconds=timeout_seconds,
-        )
-    except AgentTimeoutError:
-        return ""
-    except AgentError:
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout
+    return run_researcher(
+        workspace_dir=workspace_dir,
+        prompt=prompt,
+        timeout_seconds=timeout_seconds,
+        fail_loud=False,
+    )
 
 
 def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
@@ -787,17 +781,22 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
     # ------------------------------------------------------------------
     # Role #2: hub-manager (LLM call #2) — runs the three conferences
     # ------------------------------------------------------------------
-    hub_stdout = _safe_run_claude(
+    hub_result = _safe_run_claude(
         workspace_dir=workspace_dir,
         prompt=_hub_manager_prompt(ctx, iter_idx),
         timeout_seconds=per_llm_budget_s,
         label="hub-manager",
     )
-    hub_payload = _parse_hub_manager_output(
-        workspace_dir=workspace_dir,
-        iter_idx=iter_idx,
-        stdout=hub_stdout,
-    )
+    # Prefer the framework-parsed payload; fall back to disk + raw-stdout
+    # legacy parser if the helper couldn't extract a fenced JSON block.
+    if hub_result.payload:
+        hub_payload = hub_result.payload
+    else:
+        hub_payload = _parse_hub_manager_output(
+            workspace_dir=workspace_dir,
+            iter_idx=iter_idx,
+            stdout=hub_result.raw_stdout,
+        )
 
     # Extract knobs with defaults.
     hrp_lookback_bars = int(

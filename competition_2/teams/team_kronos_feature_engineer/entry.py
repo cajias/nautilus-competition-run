@@ -28,8 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nautilus_competition.agent_runner import (  # type: ignore[import-untyped]
-    AgentTimeoutError,
-    run_claude,
+    run_researcher,
 )
 from nautilus_trader.config import StrategyConfig  # type: ignore[import-untyped]
 from nautilus_trader.model.data import Bar, BarType  # type: ignore[import-untyped]
@@ -496,96 +495,29 @@ def _researcher(
         f"kronos_last_hidden_mean (optional). Exit when done.{retry_hint}"
     )
 
-    try:
-        result = run_claude(
-            workspace_dir=TEAM_DIR,
-            prompt=prompt,
-            command=["claude", "--print", "--output-format", "json"],
-            timeout_seconds=RESEARCHER_TIMEOUT_S,
-        )
-    except AgentTimeoutError:
-        LOGGER.warning("researcher timed out; using fallback hypothesis")
-        paths.research_md.write_text("# Researcher timed out — fallback hypothesis used\n")
-        return dict(FALLBACK_HYPOTHESIS)
-
-    if result.returncode != 0:
-        LOGGER.warning(
-            "researcher rc=%s; using fallback. stderr=%r",
-            result.returncode,
-            result.stderr[:300],
-        )
-        paths.research_md.write_text(
-            f"# Researcher failed (rc={result.returncode})\n\n"
-            f"stderr: {result.stderr[:2000]}\n\n"
-            f"stdout: {result.stdout[:4000]}\n"
-        )
-        return dict(FALLBACK_HYPOTHESIS)
+    result = run_researcher(
+        workspace_dir=TEAM_DIR,
+        prompt=prompt,
+        timeout_seconds=RESEARCHER_TIMEOUT_S,
+        fail_loud=False,
+    )
 
     paths.research_md.write_text(
-        f"# Researcher output\n\n{result.stdout[:20000]}\n"
+        f"# Researcher output (envelope_unwrapped={result.unwrapped_envelope}, "
+        f"duration={result.duration_seconds:.1f}s)\n\n"
+        f"{result.raw_stdout[:20000]}\n"
     )
 
-    unwrapped = _unwrap_bedrock_envelope(result.stdout)
-    LOGGER.debug(
-        "researcher stdout: envelope=%s, len=%d",
-        unwrapped is not result.stdout,
-        len(unwrapped),
-    )
-    parsed = _extract_json_block(unwrapped)
-    if parsed is None or not _hypothesis_is_valid(parsed):
-        LOGGER.warning("researcher output missing/invalid JSON block; using fallback")
+    if not result.payload:
+        LOGGER.warning(
+            "researcher returned empty payload (raw_stdout_len=%d); using fallback",
+            len(result.raw_stdout),
+        )
         return dict(FALLBACK_HYPOTHESIS)
-    return parsed
-
-
-def _unwrap_bedrock_envelope(text: str) -> str:
-    """Return the inner assistant message if `text` is a Bedrock --output-format json envelope, else `text` unchanged."""
-    stripped = text.strip()
-    if not stripped.startswith("{"):
-        return text
-    try:
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        return text
-    if isinstance(payload, dict) and isinstance(payload.get("result"), str) and payload.get("type") == "result":
-        return payload["result"]
-    return text
-
-
-def _extract_json_block(text: str) -> dict[str, Any] | None:
-    """Find the first ```json fenced block and parse it. Tolerant of
-    surrounding prose.
-    """
-    idx = 0
-    while True:
-        open_tag = text.find("```json", idx)
-        if open_tag < 0:
-            break
-        body_start = text.find("\n", open_tag)
-        if body_start < 0:
-            return None
-        close_tag = text.find("```", body_start + 1)
-        if close_tag < 0:
-            return None
-        body = text[body_start + 1 : close_tag].strip()
-        try:
-            obj = json.loads(body)
-            if isinstance(obj, dict):
-                return obj
-        except json.JSONDecodeError:
-            pass
-        idx = close_tag + 3
-    # Last-ditch: try to parse the whole stdout in case Claude returned bare
-    # JSON without a fence.
-    try:
-        obj = json.loads(text.strip())
-        if isinstance(obj, dict):
-            if "result" in obj and "type" in obj and "feature_shortlist" not in obj:
-                return None
-            return obj
-    except json.JSONDecodeError:
-        pass
-    return None
+    if not _hypothesis_is_valid(result.payload):
+        LOGGER.warning("researcher payload missing required keys; using fallback")
+        return dict(FALLBACK_HYPOTHESIS)
+    return result.payload
 
 
 def _hypothesis_is_valid(obj: dict[str, Any]) -> bool:

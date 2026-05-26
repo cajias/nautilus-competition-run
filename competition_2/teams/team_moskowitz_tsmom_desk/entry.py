@@ -40,8 +40,7 @@ from nautilus_trader.persistence.catalog import ParquetDataCatalog  # type: igno
 from nautilus_trader.trading.strategy import Strategy  # type: ignore[import-untyped]
 
 from nautilus_competition.agent_runner import (  # type: ignore[import-untyped]
-    AgentTimeoutError,
-    run_claude,
+    run_researcher,
 )
 
 if TYPE_CHECKING:
@@ -213,30 +212,32 @@ def _run_researcher(
         f"RECOMMENDED_VOL_TARGET (ann float), CITATIONS (<=5 papers), "
         f"RISKS (<=3 bullets). Keep under 600 words. Exit when file exists."
     )
-    try:
-        result = run_claude(
-            workspace_dir=workspace_dir,
-            prompt=prompt,
-            command=["claude", "--print", "--output-format", "json"],
-            timeout_seconds=min(timeout_s, 420),  # cap researcher at 7min
-        )
-    except AgentTimeoutError as exc:
-        logger.warning("researcher timed out: %s", exc)
-        return None
-    if result.returncode != 0:
-        logger.warning(
-            "researcher returned rc=%s stderr=%s",
-            result.returncode,
-            (result.stderr or "")[:200],
-        )
-        return None
+    result = run_researcher(
+        workspace_dir=workspace_dir,
+        prompt=prompt,
+        timeout_seconds=min(timeout_s, 420),  # cap researcher at 7min
+        fail_loud=False,
+    )
+    if not result.payload and not result.raw_stdout:
+        logger.warning("researcher returned empty result (stderr=%r)", result.raw_stderr[:200])
+        # Even on failure, still seed a stub so downstream roles have a file.
     if not research_out.exists():
-        # Claude may have written elsewhere — fall back to synthesized stub.
-        research_out.write_text(
-            f"# research.md (stub)\n\n"
-            f"Researcher subagent did not persist a file; using defaults.\n"
-            f"- prev_gain: {prev_gain}\n- iteration: {iteration}\n"
-        )
+        # Claude may have printed inline rather than writing the file — persist
+        # the unwrapped/raw text as a forensic stub. If everything failed, write
+        # a synthesized stub so the pipeline can proceed.
+        if result.raw_stdout:
+            research_out.write_text(
+                f"# research.md (captured from subprocess stdout)\n\n"
+                f"envelope_unwrapped={result.unwrapped_envelope} "
+                f"duration={result.duration_seconds:.1f}s\n\n"
+                f"{result.raw_stdout[:8000]}\n"
+            )
+        else:
+            research_out.write_text(
+                f"# research.md (stub)\n\n"
+                f"Researcher subagent did not persist a file; using defaults.\n"
+                f"- prev_gain: {prev_gain}\n- iteration: {iteration}\n"
+            )
     return str(research_out)
 
 

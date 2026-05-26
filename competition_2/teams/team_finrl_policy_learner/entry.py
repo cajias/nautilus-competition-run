@@ -107,7 +107,7 @@ def _invoke_researcher(ctx: Any, iter_idx: int) -> None:
         return
 
     try:
-        from nautilus_competition.agent_runner import run_claude  # type: ignore[import-not-found]
+        from nautilus_competition.agent_runner import run_researcher  # type: ignore[import-not-found]
     except Exception as exc:  # pragma: no cover - only hit outside harness
         log.warning("agent_runner import failed: %s; skipping researcher", exc)
         return
@@ -124,23 +124,18 @@ def _invoke_researcher(ctx: Any, iter_idx: int) -> None:
         f"- bar_type: {ctx.config.instrument.bar_type}\n"
     )
 
-    try:
-        result = run_claude(
-            workspace_dir=TEAM_DIR,
-            prompt=RESEARCHER_PROMPT,
-            command=["claude", "--print", "--output-format", "json"],
-            timeout_seconds=min(
-                RESEARCHER_TIMEOUT_S, ctx.config.agent.per_train_timeout_seconds
-            ),
+    timeout_s = min(RESEARCHER_TIMEOUT_S, ctx.config.agent.per_train_timeout_seconds)
+    result = run_researcher(
+        workspace_dir=TEAM_DIR,
+        prompt=RESEARCHER_PROMPT,
+        timeout_seconds=timeout_s,
+        fail_loud=False,
+    )
+    if not result.payload and result.raw_stderr:
+        log.warning(
+            "researcher returned no payload; raw_stderr=%r",
+            result.raw_stderr[:300],
         )
-        if result.returncode != 0:
-            log.warning(
-                "researcher claude rc=%s stderr=%r",
-                result.returncode,
-                result.stderr[:300],
-            )
-    except Exception as exc:
-        log.warning("researcher invocation failed: %s", exc)
 
     # If the researcher didn't write the cache, seed a deterministic default so
     # downstream roles have something to read.

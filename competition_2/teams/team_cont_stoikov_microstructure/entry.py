@@ -40,9 +40,10 @@ from nautilus_trader.persistence.catalog import ParquetDataCatalog  # type: igno
 from nautilus_trader.trading.strategy import Strategy  # type: ignore[import-untyped]
 
 from nautilus_competition.agent_runner import (  # type: ignore[import-untyped]
-    AgentError,
-    AgentTimeoutError,
-    run_claude,
+    run_researcher,
+)
+from nautilus_competition.researcher_helpers import (  # type: ignore[import-untyped]
+    _unwrap_bedrock_envelope,
 )
 
 
@@ -345,30 +346,28 @@ def _researcher(ctx: object, iter_idx: int) -> str:
 
     prompt = _build_researcher_prompt(ctx, iter_idx)
 
-    try:
-        result = run_claude(
-            workspace_dir=TEAM_DIR,
-            prompt=prompt,
-            command=["claude", "--print", "--output-format", "json"],
-            timeout_seconds=RESEARCHER_TIMEOUT_SECONDS,
+    # The researcher prompt asks for free-form markdown (not fenced JSON), so
+    # we use ``run_researcher(fail_loud=False)`` purely for its envelope-
+    # unwrap and timeout-floor handling. The framework helper will also try
+    # to parse fenced JSON; we ignore that and take the unwrapped text.
+    result = run_researcher(
+        workspace_dir=TEAM_DIR,
+        prompt=prompt,
+        timeout_seconds=RESEARCHER_TIMEOUT_SECONDS,
+        fail_loud=False,
+    )
+    if not result.raw_stdout:
+        logger.warning(
+            "researcher: empty subprocess output (stderr=%r); using canned brief",
+            result.raw_stderr[:200],
         )
-    except (AgentTimeoutError, AgentError) as exc:
-        logger.warning("researcher: Claude call failed (%s); using canned brief", exc)
         brief = _canned_brief(ctx)
     else:
-        # Extract `result` field from the JSON payload; fall back to raw stdout.
-        try:
-            payload = json.loads(result.stdout)
-            brief = payload.get("result") if isinstance(payload, dict) else None
-            if not isinstance(brief, str) or not brief.strip():
-                brief = result.stdout
-        except (json.JSONDecodeError, ValueError):
-            brief = result.stdout
-        if result.returncode != 0:
-            logger.warning(
-                "researcher: Claude exited rc=%s; using canned fallback", result.returncode
-            )
-            brief = _canned_brief(ctx)
+        # Extract the unwrapped assistant message text. ``run_researcher``
+        # already decided whether the stdout was an envelope; re-run the
+        # detector here so we get the inner string for storage.
+        unwrapped, _ = _unwrap_bedrock_envelope(result.raw_stdout)
+        brief = unwrapped if unwrapped.strip() else _canned_brief(ctx)
 
     # Persist to both caches.
     brief_path.write_text(brief)
