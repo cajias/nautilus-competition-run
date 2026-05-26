@@ -58,8 +58,8 @@ NOTES_DIR = TEAM_DIR / "notes"
 ATTEMPTS_DIR = TEAM_DIR / "attempts"
 CACHE_DIR = TEAM_DIR / "cache"
 
-# Researcher budget: 180s of the 600s train window.
-RESEARCHER_TIMEOUT_SECONDS = 180
+# Researcher budget: 420s of the 600s train window.
+RESEARCHER_TIMEOUT_SECONDS = 420
 # Reuse a cached researcher brief if younger than this.
 RESEARCH_CACHE_MAX_AGE_SECONDS = 60 * 60  # 1 hour
 

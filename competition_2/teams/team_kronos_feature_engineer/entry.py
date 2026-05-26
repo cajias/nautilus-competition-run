@@ -53,9 +53,9 @@ TEAM_DIR = Path(__file__).parent
 # Constants / defaults
 # ---------------------------------------------------------------------------
 
-# Researcher subprocess timeout. Leaves ~420s of the 600s global budget for
+# Researcher subprocess timeout. Leaves ~180s of the 600s global budget for
 # feature engineering + model fit + strategy assembly.
-RESEARCHER_TIMEOUT_S = 180
+RESEARCHER_TIMEOUT_S = 420
 
 # Fallback hypothesis if the researcher subprocess fails or emits malformed
 # JSON. Deliberately classical-only so we always ship a round.
@@ -525,11 +525,31 @@ def _researcher(
         f"# Researcher output\n\n{result.stdout[:20000]}\n"
     )
 
-    parsed = _extract_json_block(result.stdout)
+    unwrapped = _unwrap_bedrock_envelope(result.stdout)
+    LOGGER.debug(
+        "researcher stdout: envelope=%s, len=%d",
+        unwrapped is not result.stdout,
+        len(unwrapped),
+    )
+    parsed = _extract_json_block(unwrapped)
     if parsed is None or not _hypothesis_is_valid(parsed):
         LOGGER.warning("researcher output missing/invalid JSON block; using fallback")
         return dict(FALLBACK_HYPOTHESIS)
     return parsed
+
+
+def _unwrap_bedrock_envelope(text: str) -> str:
+    """Return the inner assistant message if `text` is a Bedrock --output-format json envelope, else `text` unchanged."""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return text
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return text
+    if isinstance(payload, dict) and isinstance(payload.get("result"), str) and payload.get("type") == "result":
+        return payload["result"]
+    return text
 
 
 def _extract_json_block(text: str) -> dict[str, Any] | None:
@@ -560,6 +580,8 @@ def _extract_json_block(text: str) -> dict[str, Any] | None:
     try:
         obj = json.loads(text.strip())
         if isinstance(obj, dict):
+            if "result" in obj and "type" in obj and "feature_shortlist" not in obj:
+                return None
             return obj
     except json.JSONDecodeError:
         pass

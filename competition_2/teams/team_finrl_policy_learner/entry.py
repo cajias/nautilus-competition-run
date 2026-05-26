@@ -52,7 +52,7 @@ MEMORY_LOG = NOTES_DIR / "memory.md"
 # ---------------------------------------------------------------------------
 # Budget constants
 # ---------------------------------------------------------------------------
-RESEARCHER_TIMEOUT_S = 180
+RESEARCHER_TIMEOUT_S = 420
 PPO_WALL_BUDGET_S = 300  # leaves ~120s headroom inside 600s harness budget
 PPO_TOTAL_TIMESTEPS = 50_000
 PPO_N_STEPS = 1024

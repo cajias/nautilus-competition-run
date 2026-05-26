@@ -218,7 +218,7 @@ def _run_researcher(
             workspace_dir=workspace_dir,
             prompt=prompt,
             command=["claude", "--print", "--output-format", "json"],
-            timeout_seconds=min(timeout_s, 180),  # cap researcher at 3min
+            timeout_seconds=min(timeout_s, 420),  # cap researcher at 7min
         )
     except AgentTimeoutError as exc:
         logger.warning("researcher timed out: %s", exc)
