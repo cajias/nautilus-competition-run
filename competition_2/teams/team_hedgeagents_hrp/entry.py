@@ -27,10 +27,9 @@ from __future__ import annotations
 import json
 import math
 from collections import deque
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from nautilus_competition.agent_runner import (  # type: ignore[import-untyped]
     ResearcherResult,
@@ -85,6 +84,18 @@ LOOKBACK_CEIL_ABSOLUTE = 1000
 
 def _researcher_prompt(ctx: Any, iter_idx: int) -> str:
     return (
+        # ── JSON OUTPUT SPEC FIRST (load-bearing for automated parser) ──
+        f"OUTPUT FORMAT (mandatory): your FINAL message MUST be a single "
+        f"fenced ```json code block — and NOTHING ELSE before or after it — "
+        f"with EXACTLY these top-level keys:\n"
+        f"  spoke_priors (object with sub-keys trend, mean_rev, vol_carry, "
+        f"each holding a short prior string),\n"
+        f"  regime_guess (one of: trend | range | mixed | vol_spike),\n"
+        f"  hypothesis (short string summarizing this iteration's thesis).\n"
+        f"The team's deterministic code parses this stdout block and "
+        f"persists it to ./attempts/{iter_idx:03d}/research.json. Do NOT "
+        f"call the Write tool — Write is denied in this subprocess.\n\n"
+        # ── CONTEXT ──
         f"You are the RESEARCHER role for team_hedgeagents_hrp, iteration "
         f"{iter_idx}. Your job is to synthesize priors from SOTA and prior "
         f"rounds.\n\n"
@@ -95,20 +106,31 @@ def _researcher_prompt(ctx: Any, iter_idx: int) -> str:
         f"  4. ./notes/ (any prior memory-keeper notes, if present).\n"
         f"  5. ../team_hedgeagents_hub/ if it exists "
         f"(direct ancestor in competition_1).\n\n"
-        f"WRITE:\n"
-        f"  - ./notes/research_log.md  (append-only, short bullet list "
-        f"of new findings this iteration)\n"
-        f"  - ./attempts/{iter_idx:03d}/research.json  (machine-readable JSON "
-        f"with keys: spoke_priors (dict of trend/mean_rev/vol_carry priors), "
-        f"regime_guess ('trend'|'range'|'mixed'|'vol_spike'), "
-        f"hypothesis (short string))\n\n"
-        f"Keep the JSON minimal; the hub-manager will read it next. EXIT "
-        f"after writing both files. Do not return control until they exist."
+        # ── FINAL OUTPUT INSTRUCTION (repeated for emphasis) ──
+        f"Output ONLY the fenced ```json block with the schema above. No "
+        f"prose before or after the fence. The parser will reject any other "
+        f"format."
     )
 
 
 def _hub_manager_prompt(ctx: Any, iter_idx: int) -> str:
     return (
+        # ── JSON OUTPUT SPEC FIRST (load-bearing for automated parser) ──
+        f"OUTPUT FORMAT (mandatory): your FINAL message MUST be a single "
+        f"fenced ```json code block — and NOTHING ELSE before or after it — "
+        f"with EXACTLY these top-level keys:\n"
+        f"  hrp_lookback_bars (int, 100..1000),\n"
+        f"  disagree_threshold (float, 0.05..0.50),\n"
+        f"  max_weight_per_spoke (float, 0.34..1.0),\n"
+        f"  drawdown_cap (float, 0.05..0.40),\n"
+        f"  trend_period (int, 20..200),\n"
+        f"  mr_period (int, 10..60),\n"
+        f"  vol_period (int, 10..60),\n"
+        f"  notes (short string: thesis + any extreme-market pivots).\n"
+        f"The team's deterministic code parses this stdout block and "
+        f"persists it to ./attempts/{iter_idx:03d}/hub_manager.json. Do "
+        f"NOT call the Write tool — Write is denied in this subprocess.\n\n"
+        # ── CONTEXT ──
         f"You are the HUB-MANAGER role for team_hedgeagents_hrp, "
         f"iteration {iter_idx}. You chair the three conferences (budget, "
         f"experience-sharing, extreme-market) and produce a single JSON "
@@ -118,27 +140,18 @@ def _hub_manager_prompt(ctx: Any, iter_idx: int) -> str:
         f"  2. ./_inbox/context.md (note: prev_gain and "
         f"prev_round_leaderboard are here).\n"
         f"  3. ./attempts/{iter_idx:03d}/research.json (the researcher's "
-        f"output from this same iteration).\n"
+        f"output from this same iteration; persisted to disk by the team's "
+        f"Python code from the researcher's stdout JSON).\n"
         f"  4. ./notes/round_*.md if any (memory-keeper trail).\n\n"
-        f"DECIDE (apply the three conferences as described in CLAUDE.md):\n"
-        f"  - hrp_lookback_bars (int, 100..1000)\n"
-        f"  - disagree_threshold (float, 0.05..0.50; below this the "
-        f"composite signal routes to cash)\n"
-        f"  - max_weight_per_spoke (float, 0.34..1.0)\n"
-        f"  - drawdown_cap (float, 0.05..0.40; live critic cuts trading "
-        f"if session drawdown exceeds this)\n"
-        f"  - trend_period (int, 20..200)\n"
-        f"  - mr_period (int, 10..60)\n"
-        f"  - vol_period (int, 10..60)\n"
-        f"  - notes (short string: thesis + any extreme-market pivots)\n\n"
+        f"Apply the three conferences as described in CLAUDE.md.\n"
         f"If prev_gain < 0 in _inbox/context.md, rotate the lookback "
         f"(e.g., if prior was 500 try 200 or 800). If prev_gain <= -0.10, "
         f"you MAY recommend shrinking max_weight_per_spoke toward 0.4 to "
         f"force more diversification.\n\n"
-        f"WRITE the JSON to ./attempts/{iter_idx:03d}/hub_manager.json "
-        f"AND ALSO print it to stdout as the final output of your session "
-        f"(so the orchestrator can parse it from the subprocess JSON "
-        f"envelope's 'result' field). Then EXIT."
+        # ── FINAL OUTPUT INSTRUCTION (repeated for emphasis) ──
+        f"Output ONLY the fenced ```json block with the schema above. No "
+        f"prose before or after the fence. The parser will reject any other "
+        f"format."
     )
 
 
@@ -147,9 +160,13 @@ def _hub_manager_prompt(ctx: Any, iter_idx: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
-class RuntimeRules:
-    """Codified output of the risk-officer; serialized to runtime_rules.json."""
+class RuntimeRules(NamedTuple):
+    """Codified output of the risk-officer; serialized to runtime_rules.json.
+
+    NamedTuple instead of @dataclass(frozen=True) because the team_loader
+    omits sys.modules registration before exec_module, breaking @dataclass
+    under Python 3.12. NamedTuple is immutable by construction.
+    """
 
     hrp_lookback_bars: int
     disagree_threshold: float
@@ -164,7 +181,8 @@ class RuntimeRules:
     notes: str
 
     def to_json(self) -> str:
-        return json.dumps(self.__dict__, indent=2, sort_keys=True)
+        # NamedTuple uses _asdict() (dataclass would have used self.__dict__).
+        return json.dumps(self._asdict(), indent=2, sort_keys=True)
 
 
 def _critic_clamp(
@@ -771,12 +789,31 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
     # ------------------------------------------------------------------
     # Role #1: researcher (LLM call #1)
     # ------------------------------------------------------------------
-    _safe_run_claude(
+    # Subprocess Write tool is denied; the researcher emits its JSON on
+    # stdout (parsed by run_researcher into result.payload) and we persist
+    # it to disk here so the hub-manager prompt's "READ research.json" step
+    # finds the file.
+    research_result = _safe_run_claude(
         workspace_dir=workspace_dir,
         prompt=_researcher_prompt(ctx, iter_idx),
         timeout_seconds=per_llm_budget_s,
         label="researcher",
     )
+    research_path = (
+        workspace_dir / "attempts" / f"{iter_idx:03d}" / "research.json"
+    )
+    if research_result.payload:
+        research_path.write_text(
+            json.dumps(research_result.payload, indent=2, sort_keys=True)
+        )
+        # Append a one-line note to research_log.md for cross-iter memory.
+        log_path = workspace_dir / "notes" / "research_log.md"
+        regime = research_result.payload.get("regime_guess", "?")
+        hypothesis = str(research_result.payload.get("hypothesis", ""))[:200]
+        existing = log_path.read_text() if log_path.exists() else "# research_log.md\n"
+        log_path.write_text(
+            existing + f"\n- iter {iter_idx}: regime={regime} | {hypothesis}\n"
+        )
 
     # ------------------------------------------------------------------
     # Role #2: hub-manager (LLM call #2) — runs the three conferences
@@ -797,6 +834,15 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
             iter_idx=iter_idx,
             stdout=hub_result.raw_stdout,
         )
+
+    # Subprocess Write tool is denied — persist the parsed payload here so
+    # the on-disk forensic record of the iteration is complete and so future
+    # iterations (or other roles) can read hub_manager.json from disk.
+    if hub_payload:
+        hub_path = (
+            workspace_dir / "attempts" / f"{iter_idx:03d}" / "hub_manager.json"
+        )
+        hub_path.write_text(json.dumps(hub_payload, indent=2, sort_keys=True))
 
     # Extract knobs with defaults.
     hrp_lookback_bars = int(

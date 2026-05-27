@@ -22,10 +22,9 @@ import json
 import logging
 import math
 import pickle  # noqa: S403 - trusted self-written artifacts only
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from nautilus_competition.agent_runner import (  # type: ignore[import-untyped]
     run_researcher,
@@ -332,9 +331,13 @@ def _compute_live_features(
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
-class _RoundPaths:
-    """Per-iteration artifact paths."""
+class _RoundPaths(NamedTuple):
+    """Per-iteration artifact paths.
+
+    NamedTuple instead of @dataclass(frozen=True) because the team_loader
+    omits sys.modules registration before exec_module, which breaks
+    @dataclass under Python 3.12. NamedTuple is immutable by construction.
+    """
 
     attempt_dir: Path
     research_md: Path
@@ -474,6 +477,23 @@ def _researcher(
         )
 
     prompt = (
+        # ── JSON OUTPUT SPEC FIRST (load-bearing for downstream parser) ──
+        f"OUTPUT FORMAT (mandatory, evaluated by an automated parser): your "
+        f"FINAL message MUST be a single fenced ```json code block — and "
+        f"NOTHING ELSE before or after it — with EXACTLY these top-level keys:\n"
+        f"  feature_shortlist (list of objects {{name, rationale, "
+        f"expected_sign, paper_ref?}}),\n"
+        f"  model_head (one of: lightgbm | logistic | gbm_sklearn),\n"
+        f"  label_horizon_bars (int),\n"
+        f"  label_def (str, e.g. 'sign(close[t+h] - close[t])'),\n"
+        f"  regime_gate (object {{realized_vol_annualized_max: float}}),\n"
+        f"  vol_target_annualized (float),\n"
+        f"  drawdown_cap_pct (float),\n"
+        f"  position_size_cap_pct (float).\n"
+        f"feature_shortlist[*].name MUST be drawn from this allow-list: "
+        f"har_rv_1, har_rv_5, har_rv_22, realized_skew_20, "
+        f"vw_momentum_residual_20, kronos_last_hidden_mean.\n\n"
+        # ── CONTEXT ──
         f"You are the researcher role for team_kronos_feature_engineer, "
         f"iteration {ctx.iteration} of round {ctx.round_index}. "
         f"Read CLAUDE.md, _inbox/context.md, and notes/research_log.md. "
@@ -482,17 +502,12 @@ def _researcher(
         f"(3) external arXiv (Kronos 2508.02739, HAR-RV Corsi 2009, realized "
         f"skew Amaya et al. 2015, vol-weighted momentum Moskowitz 2012). "
         f"Produce a feature shortlist + model head + regime gate + risk knobs. "
-        f"Write your full analysis to attempts/{ctx.iteration:03d}/research.md "
-        f"and include a fenced ```json block with exactly these keys: "
-        f"feature_shortlist (list of {{name, rationale, expected_sign, paper_ref?}}), "
-        f"model_head (one of lightgbm|logistic|gbm_sklearn), "
-        f"label_horizon_bars (int), label_def (str), "
-        f"regime_gate ({{realized_vol_annualized_max: float}}), "
-        f"vol_target_annualized (float), drawdown_cap_pct (float), "
-        f"position_size_cap_pct (float). "
-        f"Available feature names MUST be drawn from: har_rv_1, har_rv_5, "
-        f"har_rv_22, realized_skew_20, vw_momentum_residual_20, "
-        f"kronos_last_hidden_mean (optional). Exit when done.{retry_hint}"
+        f"You MAY also write narrative analysis to "
+        f"attempts/{ctx.iteration:03d}/research.md, but that file is a side "
+        f"artifact — the parser ONLY reads your stdout.{retry_hint}\n\n"
+        # ── FINAL OUTPUT INSTRUCTION (repeated for emphasis) ──
+        f"Output ONLY a fenced ```json block with the schema above. No prose "
+        f"before or after the fence. The parser will reject any other format."
     )
 
     result = run_researcher(
