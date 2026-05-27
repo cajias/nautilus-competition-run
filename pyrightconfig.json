@@ -1,0 +1,13 @@
+{
+  "venvPath": "../nautilus-competition",
+  "venv": ".venv",
+  "include": ["competition_2/teams"],
+  "exclude": [
+    "**/attempts/**",
+    "**/runs/**",
+    "**/notes/**",
+    "**/.venv/**",
+    "**/apm_modules/**"
+  ],
+  "pythonVersion": "3.12"
+}
