@@ -24,10 +24,9 @@ import json
 import logging
 import math
 import os
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -217,6 +216,11 @@ def _run_researcher(
         prompt=prompt,
         timeout_seconds=min(timeout_s, 420),  # cap researcher at 7min
         fail_loud=False,
+        # Researcher writes free-form markdown (THESIS / RECOMMENDED_LOOKBACKS /
+        # … sections) to a file. We persist ``result.raw_stdout`` as a forensic
+        # stub if the file isn't there — there is no fenced JSON payload to
+        # parse, so disable parse_json to suppress the spurious WARN.
+        parse_json=False,
     )
     if not result.payload and not result.raw_stdout:
         logger.warning("researcher returned empty result (stderr=%r)", result.raw_stderr[:200])
@@ -244,8 +248,14 @@ def _run_researcher(
 # -----------------------------------------------------------------------------
 # Role 2: hypothesis-generator — deterministic.
 # -----------------------------------------------------------------------------
-@dataclass(frozen=True)
-class Hypothesis:
+class Hypothesis(NamedTuple):
+    """TSMOM lookback pair + Keltner/ATR/vol-target knobs.
+
+    NamedTuple instead of @dataclass(frozen=True) because the team_loader
+    omits sys.modules registration before exec_module, breaking @dataclass
+    under Python 3.12. NamedTuple is immutable by construction.
+    """
+
     short_span_bars: int
     long_span_bars: int
     keltner_period: int

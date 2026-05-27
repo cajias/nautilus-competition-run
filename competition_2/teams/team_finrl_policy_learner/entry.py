@@ -25,10 +25,9 @@ import signal
 import sys
 import time
 import traceback
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from nautilus_trader.config import StrategyConfig  # type: ignore[import-untyped]
 from nautilus_trader.model.data import Bar, BarType  # type: ignore[import-untyped]
@@ -130,6 +129,10 @@ def _invoke_researcher(ctx: Any, iter_idx: int) -> None:
         prompt=RESEARCHER_PROMPT,
         timeout_seconds=timeout_s,
         fail_loud=False,
+        # The researcher emits free-form markdown that is written to disk by
+        # tooling within the subprocess; we do not consume a fenced JSON
+        # payload, so disable parse_json to suppress the spurious WARN.
+        parse_json=False,
     )
     if not result.payload and result.raw_stderr:
         log.warning(
@@ -157,8 +160,14 @@ def _default_research_fallback() -> str:
 # ---------------------------------------------------------------------------
 # Role 2: hypothesis-generator
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class Hypothesis:
+class Hypothesis(NamedTuple):
+    """Reward-shape + PPO knobs.
+
+    NamedTuple instead of @dataclass(frozen=True) because the team_loader
+    omits sys.modules registration before exec_module, breaking @dataclass
+    under Python 3.12. NamedTuple is immutable by construction.
+    """
+
     lambda_turnover: float
     mu_drawdown: float
     entropy_coef: float

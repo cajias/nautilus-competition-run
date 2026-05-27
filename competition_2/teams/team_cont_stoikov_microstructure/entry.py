@@ -347,14 +347,17 @@ def _researcher(ctx: object, iter_idx: int) -> str:
     prompt = _build_researcher_prompt(ctx, iter_idx)
 
     # The researcher prompt asks for free-form markdown (not fenced JSON), so
-    # we use ``run_researcher(fail_loud=False)`` purely for its envelope-
-    # unwrap and timeout-floor handling. The framework helper will also try
-    # to parse fenced JSON; we ignore that and take the unwrapped text.
+    # we use ``run_researcher(fail_loud=False, parse_json=False)`` purely for
+    # its envelope-unwrap and timeout-floor handling. parse_json=False
+    # suppresses the spurious "researcher payload parse failed" WARN that
+    # would otherwise fire on every iter (the framework's fenced-JSON parser
+    # is intentionally disabled here).
     result = run_researcher(
         workspace_dir=TEAM_DIR,
         prompt=prompt,
         timeout_seconds=RESEARCHER_TIMEOUT_SECONDS,
         fail_loud=False,
+        parse_json=False,
     )
     if not result.raw_stdout:
         logger.warning(

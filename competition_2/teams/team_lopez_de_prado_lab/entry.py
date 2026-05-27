@@ -476,6 +476,11 @@ def _researcher(ctx: Any, artifacts: _Artifacts, memory: dict[str, Any]) -> str:
             timeout_seconds=timeout_s,
             command=command,
             fail_loud=False,
+            # The researcher emits free-form markdown; we consume
+            # ``result.raw_stdout`` (and re-unwrap the envelope locally below)
+            # rather than a fenced JSON payload. parse_json=False avoids the
+            # spurious "researcher payload parse failed" WARN.
+            parse_json=False,
         )
         # The researcher writes its own markdown, but if the subprocess only
         # printed inline, capture the unwrapped text so the fallback path has
