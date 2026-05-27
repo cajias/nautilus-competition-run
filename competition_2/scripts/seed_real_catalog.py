@@ -1,13 +1,14 @@
 """Seed the competition_2 catalog with real Binance BTCUSDT 5-minute klines.
 
-Fetches a 131-day window via Binance's public ``/api/v3/klines`` endpoint
+Fetches a 253-day window via Binance's public ``/api/v3/klines`` endpoint
 (no API key needed), builds a NautilusTrader BarType matching
-``BTCUSDT.BINANCE-5-MINUTE-LAST-EXTERNAL``, and persists ~37,700 bars + the
+``BTCUSDT.BINANCE-5-MINUTE-LAST-EXTERNAL``, and persists ~72,864 bars + the
 ``BTCUSDT.BINANCE`` ``CurrencyPair`` instrument into
 ``<working-dir>/data/catalog/`` as a ParquetDataCatalog.
 
-Window: 2026-01-01 00:00 UTC .. 2026-05-12 00:00 UTC (131 days, spans
-train+test+eval+paper per config.yaml). ~37,728 5-minute bars.
+Window: 2025-09-01 00:00 UTC .. 2026-05-12 00:00 UTC (253 days, spans
+train+test+eval+paper per config.yaml with extended history for window
+optimization). ~72,864 5-minute bars.
 
 Pattern derived from
 ``~/Projects/workspace/nautilus-trading/tests/fixtures/crypto/build_catalog.py``
@@ -42,13 +43,13 @@ CATALOG_DIR = WORKSPACE / "data" / "catalog"
 
 SYMBOL = "BTCUSDT"
 INTERVAL = "5m"  # Binance API string
-START_UTC = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
-END_UTC = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)  # exclusive on the API; 131-day window
+START_UTC = datetime(2025, 9, 1, 0, 0, tzinfo=timezone.utc)
+END_UTC = datetime(2026, 5, 12, 0, 0, tzinfo=timezone.utc)  # exclusive on the API; 253-day window
 
 BINANCE_KLINES_URL = "https://data-api.binance.vision/api/v3/klines"
 PAGE_LIMIT = 1000          # Binance max per request
 THROTTLE_SECONDS = 0.12    # gentle pause between pages
-EXPECTED_BARS = 131 * 24 * 12  # 131 days × 288 5-min bars/day = 37,728
+EXPECTED_BARS = (END_UTC - START_UTC).days * 24 * 12  # 253 days × 288 5-min bars/day = 72,864
 
 
 def fetch_klines_paginated() -> list[list]:

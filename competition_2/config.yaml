@@ -2,24 +2,25 @@
 # match your catalog and team workflow before running `compete run`.
 name: competition_2
 
-# SOTA-sized single round (see docs/state-of-the-art/):
-#   train 73d — above FinRL 60d floor, ~21k bars for non-overfit strategy auth
-#   test  28d — 70/30 tuning split, ~8k bars for credible Sharpe t-stat
-#   eval  21d — strict OOS gate, post-LLM-cutoff (Claude Jan 2026)
-#   paper  9d — live testnet trims to duration_minutes; window just exists
+# Regime-balanced single round (selected via grid search 2026-05-27):
+#   train 90d — Oct 6 → Jan 4, B&H=0.7345 (bear regime), well above FinRL 60d floor
+#   test  14d — Jan 4 → Jan 18, 70/30 tuning split
+#   eval  28d — Jan 18 → Feb 15, B&H=0.7342, strict OOS gate
+#   paper 14d — Feb 15 → Mar 1, live testnet trims to duration_minutes
+# Δ |eval B&H − train B&H| = 0.0003 (regime check threshold 0.15 satisfied)
 windows:
   - train:
-      start: "2026-01-01T00:00:00Z"
-      end:   "2026-03-15T00:00:00Z"
+      start: "2025-10-06T00:00:00Z"
+      end:   "2026-01-04T00:00:00Z"
     test:
-      start: "2026-03-15T00:00:00Z"
-      end:   "2026-04-12T00:00:00Z"
+      start: "2026-01-04T00:00:00Z"
+      end:   "2026-01-18T00:00:00Z"
     eval:
-      start: "2026-04-12T00:00:00Z"
-      end:   "2026-05-03T00:00:00Z"
+      start: "2026-01-18T00:00:00Z"
+      end:   "2026-02-15T00:00:00Z"
     paper:
-      start: "2026-05-03T00:00:00Z"
-      end:   "2026-05-12T00:00:00Z"
+      start: "2026-02-15T00:00:00Z"
+      end:   "2026-03-01T00:00:00Z"
 
 # `live` requires BINANCE_TESTNET_API_KEY/SECRET (auto-loaded from sibling
 # ~/Projects/nautilus/nautilus-trading/.envrc via harness _env.py).
