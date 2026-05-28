@@ -31,6 +31,7 @@ __pycache__/
 
 # Catalog parquet (large; seed via per-competition scripts/seed_real_catalog.py)
 **/data/catalog/data/
+**/data/catalog.bak*/
 !**/data/catalog/.gitkeep
 !**/data/catalog/README.md
 

@@ -208,18 +208,49 @@ class TeamStrategy(Strategy):
         flat_threshold = self._rules.get("prediction_threshold_flat", 0.50)
         long_threshold = self._rules.get("prediction_threshold_long", 0.55)
 
+        # Entry/exit hysteresis. Smoke #48b iters 0/2/4 over-traded (252-270
+        # trades, sharpe ~ -115) because p_long oscillated narrowly around
+        # `long_threshold` — every minor cross flipped position state and paid
+        # half-spread. We require p_long to clear `long_threshold + 0.05` to
+        # ENTER long, and to drop below `long_threshold - 0.05` to EXIT.
+        # Inside the band the strategy holds its current position.
+        hysteresis = 0.05
+        enter_long_at = long_threshold + hysteresis
+        exit_long_at = long_threshold - hysteresis
+
+        # Hard flat below the flat_threshold (untouched — that's the regime cut).
         if p_long < flat_threshold:
             self._maybe_rebalance_to(0.0)
+            return
+
+        # Hysteresis band [exit_long_at, enter_long_at):
+        #   - If currently long, HOLD (don't exit on weak dip).
+        #   - If currently flat, STAY FLAT (don't enter on weak rise).
+        # Only a clean break of either edge causes a state change.
+        if exit_long_at <= p_long < enter_long_at:
             return
 
         # Vol-target sizing.
         vol_target = self._rules.get("vol_target_annualized", 0.20)
         pos_cap = self._rules.get("position_size_cap_pct", 0.60)
         eps = 1e-6
-        size_frac = min(vol_target / max(rv_annualized, eps), pos_cap)
-        if p_long < long_threshold:
-            # Weak long — halve sizing.
-            size_frac *= 0.5
+        vol_size_frac = min(vol_target / max(rv_annualized, eps), pos_cap)
+
+        # Confidence-weighted Kelly fraction. p_long in [flat_threshold, 1] →
+        # kelly_frac in [0, 1]; trades scale smoothly with model conviction
+        # instead of the prior binary "halve weak longs" rule. A p_long of
+        # 0.55 (mild edge) sizes ~10% of vol-target; a p_long of 1.0 sizes
+        # to the full vol-target cap. This wastes less budget on slippage
+        # for marginal signals and avoids the cliff at long_threshold.
+        edge = max(0.0, p_long - flat_threshold)
+        denom = max(1.0 - flat_threshold, 1e-9)
+        kelly_frac = min(1.0, edge / denom)
+        size_frac = vol_size_frac * kelly_frac
+        # Soft floor: if p_long crosses long_threshold the position should
+        # never be vanishingly small (rounding-out by deadband). Half-cap
+        # is the prior binary behaviour, kept as a confidence floor.
+        if p_long >= long_threshold:
+            size_frac = max(size_frac, vol_size_frac * 0.5)
         self._maybe_rebalance_to(size_frac)
 
     def _maybe_rebalance_to(self, target_frac: float) -> None:
@@ -233,7 +264,15 @@ class TeamStrategy(Strategy):
             return
 
         delta = target_frac - self._current_position_size
-        if abs(delta) < 0.05:  # deadband — avoid churn at paper
+        # Deadband 0.08. Smoke #48b iters 1/3 sized to ~0 (0 trades, gain=1.0
+        # exactly — fails strict-greater eval gate) because the prior 0.15
+        # deadband composed multiplicatively with kelly_frac × vol_size_frac:
+        # a p_long of 0.55-0.65 yields kelly~0.1-0.3, then a 0.15 deadband
+        # blocks any rebalance smaller than 15% of the current position.
+        # 0.08 still kills sub-noise rebalances but lets real Kelly-scaled
+        # signals through. The entry/exit hysteresis above (±0.05 around
+        # long_threshold) is what now suppresses thrash, not the deadband.
+        if abs(delta) < 0.08:  # deadband — only kills sub-noise rebalances
             return
 
         size = abs(delta) * float(self.config.trade_size_base)

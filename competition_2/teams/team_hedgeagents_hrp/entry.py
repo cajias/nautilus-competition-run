@@ -76,13 +76,30 @@ MAX_WEIGHT_CEIL = 1.0
 LOOKBACK_FLOOR = 100
 LOOKBACK_CEIL_ABSOLUTE = 1000
 
+# Directional-pivot rule (Class B fix for bear-regime composite collapse).
+# When the realized return over the most recent ``PIVOT_LOOKBACK_BARS``
+# closes is sustained negative (<= -PIVOT_THRESHOLD), the composite gate
+# is bypassed and the Strategy switches to a single short-trend kernel
+# (negative EWMA of returns, threshold-driven entry).
+PIVOT_LOOKBACK_BARS = 30
+PIVOT_THRESHOLD = 0.005  # 0.5% — sustained negative drift over 30 bars
+SHORT_TREND_EWMA_PERIOD = 30
+SHORT_TREND_ENTRY_THRESHOLD = 0.0005  # |neg-ewma return| > 5bps -> short
+AGREEMENT_SIZE_MULTIPLIER_FULL = 1.5
+AGREEMENT_SIZE_MULTIPLIER_PARTIAL = 1.0
+
+# Active-kernel enum values persisted to runtime_rules.json.
+KERNEL_COMPOSITE = "composite"
+KERNEL_SHORT_TREND = "short_trend"
+KERNEL_FLAT = "flat"
+
 
 # ---------------------------------------------------------------------------
 # Researcher + hub-manager prompts
 # ---------------------------------------------------------------------------
 
 
-def _researcher_prompt(ctx: Any, iter_idx: int) -> str:
+def _researcher_prompt(ctx: Any, iter_idx: int, active_kernel: str) -> str:
     return (
         # ── JSON OUTPUT SPEC FIRST (load-bearing for automated parser) ──
         f"OUTPUT FORMAT (mandatory): your FINAL message MUST be a single "
@@ -90,7 +107,7 @@ def _researcher_prompt(ctx: Any, iter_idx: int) -> str:
         f"with EXACTLY these top-level keys:\n"
         f"  spoke_priors (object with sub-keys trend, mean_rev, vol_carry, "
         f"each holding a short prior string),\n"
-        f"  regime_guess (one of: trend | range | mixed | vol_spike),\n"
+        f"  regime_guess (one of: trend | range | mixed | vol_spike | bear),\n"
         f"  hypothesis (short string summarizing this iteration's thesis).\n"
         f"The team's deterministic code parses this stdout block and "
         f"persists it to ./attempts/{iter_idx:03d}/research.json. Do NOT "
@@ -99,9 +116,21 @@ def _researcher_prompt(ctx: Any, iter_idx: int) -> str:
         f"You are the RESEARCHER role for team_hedgeagents_hrp, iteration "
         f"{iter_idx}. Your job is to synthesize priors from SOTA and prior "
         f"rounds.\n\n"
+        f"ACTIVE KERNEL THIS ITERATION: '{active_kernel}'.\n"
+        f"  - If 'composite': you are tuning the trend+mean-rev+vol-carry "
+        f"HRP-weighted gate (3-spoke composite). Bias spoke_priors toward "
+        f"the dominant regime.\n"
+        f"  - If 'short_trend': the directional-pivot rule has fired — the "
+        f"realized 30-bar return on closes is sustained negative. The "
+        f"composite is BYPASSED; the Strategy is using a single short-trend "
+        f"kernel (negative EWMA of returns, threshold-driven entry). Tune "
+        f"trend_period/disagree_threshold for that kernel; spoke_priors are "
+        f"informational only this iteration.\n"
+        f"  - If 'flat': realized drift is near zero — Strategy will not "
+        f"trade. Suggest priors that would help the next iteration pivot.\n\n"
         f"READ (in this order):\n"
         f"  1. ./CLAUDE.md (the team's full persona).\n"
-        f"  2. ./_inbox/context.md (round/iter/prev_gain).\n"
+        f"  2. ./_inbox/context.md (round/iter/prev_gain/active_kernel).\n"
         f"  3. ../../docs/state-of-the-art/ (multi-agent & allocator sections).\n"
         f"  4. ./notes/ (any prior memory-keeper notes, if present).\n"
         f"  5. ../team_hedgeagents_hub/ if it exists "
@@ -179,6 +208,16 @@ class RuntimeRules(NamedTuple):
     w_mean_rev: float
     w_vol_carry: float
     notes: str
+    # Directional-pivot rule (Class B fix). active_kernel is one of
+    # KERNEL_COMPOSITE, KERNEL_SHORT_TREND, or KERNEL_FLAT and is
+    # decided at train-time from the realized return on the train-window
+    # closes. The Strategy reads it in on_start and branches in on_bar.
+    active_kernel: str
+    pivot_lookback_bars: int
+    pivot_threshold: float
+    short_trend_period: int
+    short_trend_threshold: float
+    realized_return: float
 
     def to_json(self) -> str:
         # NamedTuple uses _asdict() (dataclass would have used self.__dict__).
@@ -313,6 +352,88 @@ def _vol_carry_signal(closes: list[float], period: int) -> float:
         return 0.0
     raw = (vol_recent - vol_prior) / vol_prior
     return max(-1.0, min(1.0, raw))
+
+
+# ----- Directional-pivot rule (Class B fix) -----
+
+
+def _realized_return(closes: list[float], lookback: int) -> float:
+    """Realized return over the most recent ``lookback`` closes.
+
+    Returns ``(closes[-1] / closes[-lookback-1]) - 1.0`` if enough bars,
+    else 0.0. Used by the directional-pivot decision in train() AND
+    every bar at trade time.
+    """
+    if len(closes) < lookback + 1:
+        return 0.0
+    prior = closes[-lookback - 1]
+    if prior <= 0.0:
+        return 0.0
+    return closes[-1] / prior - 1.0
+
+
+def _decide_kernel(realized: float, pivot_threshold: float) -> str:
+    """Pick the active kernel from a realized-return reading.
+
+    - realized <= -pivot_threshold (sustained negative drift): short-trend
+    - realized >=  pivot_threshold (sustained positive drift): composite
+    - otherwise (near zero): flat (no trade)
+    """
+    if realized <= -pivot_threshold:
+        return KERNEL_SHORT_TREND
+    if realized >= pivot_threshold:
+        return KERNEL_COMPOSITE
+    return KERNEL_FLAT
+
+
+def _short_trend_signal(closes: list[float], period: int) -> float:
+    """Negative-EWMA-of-returns short-trend kernel.
+
+    Returns a signed signal in [-1, 1]: NEGATIVE when recent returns have
+    been NEGATIVE on average (i.e. the EWMA of returns is < 0). The
+    Strategy enters a short whenever |signal| > short_trend_threshold.
+    """
+    if len(closes) < period + 1 or period <= 1:
+        return 0.0
+    alpha = 2.0 / (period + 1.0)
+    ewma = 0.0
+    # EWMA of bar-to-bar returns, oldest-first.
+    start = max(1, len(closes) - period)
+    for i in range(start, len(closes)):
+        prev = closes[i - 1]
+        if prev <= 0.0:
+            continue
+        ret = closes[i] / prev - 1.0
+        ewma = alpha * ret + (1.0 - alpha) * ewma
+    # Scale: 1bp average return -> ~0.1 signal. Clip to [-1, 1].
+    raw = ewma * 1000.0
+    return max(-1.0, min(1.0, raw))
+
+
+def _agreement_multiplier(s_trend: float, s_mr: float, s_vol: float) -> tuple[float, int]:
+    """Signed-agreement multiplier for trade_size scaling.
+
+    Returns (multiplier, signed_direction):
+      - all three same non-zero sign → (1.5, +/-1)
+      - exactly two same non-zero sign → (1.0, +/-1) (direction = majority)
+      - otherwise → (0.0, 0) (skip — full disagreement)
+    """
+    signs = [
+        1 if s_trend > 0 else (-1 if s_trend < 0 else 0),
+        1 if s_mr > 0 else (-1 if s_mr < 0 else 0),
+        1 if s_vol > 0 else (-1 if s_vol < 0 else 0),
+    ]
+    pos = sum(1 for s in signs if s > 0)
+    neg = sum(1 for s in signs if s < 0)
+    if pos == 3:
+        return (AGREEMENT_SIZE_MULTIPLIER_FULL, 1)
+    if neg == 3:
+        return (AGREEMENT_SIZE_MULTIPLIER_FULL, -1)
+    if pos == 2:
+        return (AGREEMENT_SIZE_MULTIPLIER_PARTIAL, 1)
+    if neg == 2:
+        return (AGREEMENT_SIZE_MULTIPLIER_PARTIAL, -1)
+    return (0.0, 0)
 
 
 # ----- HRP allocator -----
@@ -607,6 +728,12 @@ class TeamStrategy(Strategy):
         self._w_trend: float = 1.0 / 3.0
         self._w_mr: float = 1.0 / 3.0
         self._w_vol: float = 1.0 / 3.0
+        # Directional-pivot rule state.
+        self._active_kernel: str = KERNEL_COMPOSITE
+        self._pivot_lookback_bars: int = PIVOT_LOOKBACK_BARS
+        self._pivot_threshold: float = PIVOT_THRESHOLD
+        self._short_trend_period: int = SHORT_TREND_EWMA_PERIOD
+        self._short_trend_threshold: float = SHORT_TREND_ENTRY_THRESHOLD
 
     def on_start(self) -> None:
         self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -640,6 +767,24 @@ class TeamStrategy(Strategy):
         self._w_trend = float(data.get("w_trend", self._w_trend))
         self._w_mr = float(data.get("w_mean_rev", self._w_mr))
         self._w_vol = float(data.get("w_vol_carry", self._w_vol))
+        self._active_kernel = str(data.get("active_kernel", self._active_kernel))
+        self._pivot_lookback_bars = int(
+            data.get("pivot_lookback_bars", self._pivot_lookback_bars),
+        )
+        self._pivot_threshold = float(
+            data.get("pivot_threshold", self._pivot_threshold),
+        )
+        self._short_trend_period = int(
+            data.get("short_trend_period", self._short_trend_period),
+        )
+        self._short_trend_threshold = float(
+            data.get("short_trend_threshold", self._short_trend_threshold),
+        )
+        self.log.info(
+            f"Loaded runtime_rules: active_kernel={self._active_kernel} "
+            f"pivot_lookback={self._pivot_lookback_bars} "
+            f"pivot_threshold={self._pivot_threshold:.4f}",
+        )
 
     def on_bar(self, bar: Bar) -> None:  # noqa: C901
         if self.instrument is None:
@@ -664,11 +809,55 @@ class TeamStrategy(Strategy):
                 return
 
         closes_list = list(self._closes)
-        # Warm-up guard.
-        min_bars = max(self._trend_period, self._mr_period, 2 * self._vol_period) + 1
+        # Warm-up guard: need enough for the full composite stack AND the
+        # pivot-lookback window so the directional rule can fire.
+        min_bars = (
+            max(
+                self._trend_period,
+                self._mr_period,
+                2 * self._vol_period,
+                self._short_trend_period,
+                self._pivot_lookback_bars,
+            )
+            + 1
+        )
         if len(closes_list) < min_bars:
             return
 
+        # ── Directional-pivot rule (re-evaluated EVERY bar) ─────────────
+        # Re-decide the active kernel from the live realized-return reading.
+        # The persisted runtime_rules.active_kernel is the *train-time*
+        # decision used to seed researcher/hub-manager priors; trade-time
+        # uses the live reading so a regime flip mid-eval window switches
+        # kernels without needing another train() call.
+        realized = _realized_return(closes_list, self._pivot_lookback_bars)
+        live_kernel = _decide_kernel(realized, self._pivot_threshold)
+
+        if live_kernel == KERNEL_FLAT:
+            self._ensure_flat()
+            return
+
+        if live_kernel == KERNEL_SHORT_TREND:
+            # Single short-trend kernel: negative EWMA of returns,
+            # threshold-driven entry. Composite gate is BYPASSED.
+            s_short = _short_trend_signal(closes_list, self._short_trend_period)
+            if abs(s_short) < self._short_trend_threshold * 1000.0:
+                # Threshold compares against the same scale as the signal
+                # (signal is EWMA*1000). Below threshold -> stay flat.
+                self._ensure_flat()
+                return
+            # Bear-regime kernel: only act on the SHORT side. If the EWMA
+            # has flipped positive in a sustained-bear window, that's noise
+            # — stay flat rather than chase it long.
+            if s_short > 0.0:
+                self._ensure_flat()
+                return
+            target_fraction = max(-1.0, min(1.0, s_short))
+            target_qty = Decimal(str(target_fraction)) * self.config.trade_size
+            self._rebalance_to(target_qty)
+            return
+
+        # ── Composite kernel ────────────────────────────────────────────
         s_trend = _trend_signal(closes_list, self._trend_period)
         s_mr = _mean_rev_signal(closes_list, self._mr_period)
         s_vol = _vol_carry_signal(closes_list, self._vol_period)
@@ -678,10 +867,22 @@ class TeamStrategy(Strategy):
             self._ensure_flat()
             return
 
-        # Target a clipped fraction of trade_size per unit of composite.
-        target_fraction = max(-1.0, min(1.0, composite))
-        target_qty = Decimal(str(target_fraction)) * self.config.trade_size
-        self._rebalance_to(target_qty)
+        # Agreement-scaled sizing: 3 agree -> 1.5x, 2 agree -> 1.0x, else skip.
+        size_mult, agreement_dir = _agreement_multiplier(s_trend, s_mr, s_vol)
+        if size_mult <= 0.0:
+            # Full disagreement on direction — skip this bar.
+            self._ensure_flat()
+            return
+
+        # Sanity: composite sign should match agreement direction (it almost
+        # always will, since composite is a weighted sum). If not, trust the
+        # agreement majority over the weighted sum.
+        composite_sign = 1 if composite > 0 else -1
+        effective_sign = agreement_dir if agreement_dir != 0 else composite_sign
+
+        target_fraction = max(-1.0, min(1.0, abs(composite))) * effective_sign
+        scaled = Decimal(str(target_fraction * size_mult)) * self.config.trade_size
+        self._rebalance_to(scaled)
 
     def _estimated_equity(self, last_close: float) -> float:
         """Rough mark-to-market used only for drawdown-cap bookkeeping."""
@@ -777,7 +978,6 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
     round_idx = int(ctx.round_index)
     workspace_dir = Path(ctx.workspace_dir)
     (workspace_dir / "_inbox").mkdir(exist_ok=True)
-    (workspace_dir / "_inbox" / "context.md").write_text(_format_context(ctx))
     (workspace_dir / "attempts" / f"{iter_idx:03d}").mkdir(parents=True, exist_ok=True)
     (workspace_dir / "notes").mkdir(exist_ok=True)
 
@@ -785,6 +985,24 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
     # calls and leave a safety margin for deterministic work.
     total_budget_s = int(ctx.config.agent.per_train_timeout_seconds)
     per_llm_budget_s = max(60, (total_budget_s - 120) // 2)
+
+    # ------------------------------------------------------------------
+    # Directional-pivot rule (Class B fix): decide the active kernel BEFORE
+    # the researcher runs so the prompt can tell the LLM what it's tuning.
+    # ------------------------------------------------------------------
+    try:
+        train_closes_for_pivot = _load_train_closes(ctx)
+    except (FileNotFoundError, OSError, ValueError):
+        train_closes_for_pivot = []
+    train_realized = _realized_return(train_closes_for_pivot, PIVOT_LOOKBACK_BARS)
+    active_kernel = _decide_kernel(train_realized, PIVOT_THRESHOLD)
+
+    # Write the inbox AFTER deciding the kernel so the researcher can see it.
+    (workspace_dir / "_inbox" / "context.md").write_text(
+        _format_context(ctx)
+        + f"- active_kernel: {active_kernel}\n"
+        + f"- realized_return_30bar: {train_realized:.6f}\n"
+    )
 
     # ------------------------------------------------------------------
     # Role #1: researcher (LLM call #1)
@@ -795,7 +1013,7 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
     # finds the file.
     research_result = _safe_run_claude(
         workspace_dir=workspace_dir,
-        prompt=_researcher_prompt(ctx, iter_idx),
+        prompt=_researcher_prompt(ctx, iter_idx, active_kernel),
         timeout_seconds=per_llm_budget_s,
         label="researcher",
     )
@@ -861,12 +1079,9 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
     notes_str = str(hub_payload.get("notes", "fallback-defaults"))
 
     # ------------------------------------------------------------------
-    # Load train-window bars (no leak: train window only).
+    # Train-window bars (already loaded above for the pivot decision).
     # ------------------------------------------------------------------
-    try:
-        closes = _load_train_closes(ctx)
-    except (FileNotFoundError, OSError, ValueError):
-        closes = []
+    closes = train_closes_for_pivot
 
     # ------------------------------------------------------------------
     # Role #3: critic — clamp all knobs.
@@ -925,7 +1140,16 @@ def train(ctx: Any) -> tuple[type[TeamStrategy], TeamStrategyConfig]:
         w_trend=float(w_trend),
         w_mean_rev=float(w_mr),
         w_vol_carry=float(w_vol),
-        notes=notes_str,
+        notes=(
+            f"[active_kernel={active_kernel} "
+            f"realized_30bar={train_realized:+.5f}] " + notes_str
+        ),
+        active_kernel=active_kernel,
+        pivot_lookback_bars=PIVOT_LOOKBACK_BARS,
+        pivot_threshold=PIVOT_THRESHOLD,
+        short_trend_period=SHORT_TREND_EWMA_PERIOD,
+        short_trend_threshold=SHORT_TREND_ENTRY_THRESHOLD,
+        realized_return=float(train_realized),
     )
     RUNTIME_RULES_PATH.write_text(rules.to_json())
 

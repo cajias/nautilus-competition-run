@@ -12,17 +12,18 @@ description: |
   (5) deciding between simulated and live paper modes; (6) running the
   hermetic demo at `examples/demo_competition/`.
 author: Claude Code
-version: 1.0.0
-date: 2026-05-07
+version: 1.3.0
+date: 2026-05-26
 ---
 
 # Operator runbook — `compete`
 
 `compete run <working-dir>` orchestrates a folder of agent-controlled
 teams. Per round, per team it calls the team's `train(ctx)`, gates on a
-positive-gain eval window, runs paper sequentially (simulated or live),
-writes a leaderboard, and announces it back into each team's workspace.
-Repeat for N rounds.
+positive-gain eval window (see Promotion Rules below for the exact
+threshold and failure semantics), runs paper sequentially (simulated or
+live), writes a leaderboard, and announces it back into each team's
+workspace. Repeat for N rounds.
 
 ## Working-directory layout
 
@@ -156,6 +157,110 @@ Selected by `config.paper.mode`.
 
 Both branches end at the same `paper_metrics.json` shape.
 
+### Live-paper pre-flight
+
+Before invoking `compete run --paper-mode live` on a fresh host, run
+these three one-liners. They cover the failure modes that account for
+nearly every first-time live-paper abort. Full triage matrix in skill
+`nautilus-competition-live-paper-troubleshooting`.
+
+```bash
+# 1. Credential presence (no values logged — paths + booleans only)
+python -c 'from nautilus_competition._env import load_competition_env, describe_credential_sources; load_competition_env(); print(describe_credential_sources())'
+
+# 2. CA bundle resolves to a real file (rustls fails opaquely without one)
+python -c 'import os; p=os.environ.get("SSL_CERT_FILE"); print("SSL_CERT_FILE:", p, "exists:", bool(p) and os.path.isfile(p))'
+
+# 3. Post-mortem after a failed run
+compete status <working-dir>/runs/<run_id>
+```
+
+If a run aborts before placing orders, see skill
+`nautilus-competition-live-paper-troubleshooting` for the symptom ->
+root-cause matrix. The two most common buckets are
+`HttpClientBuildError("builder error")` (CA bundle) and
+`MissingBinanceCredentialsError` (env vars missing or shell exporting
+a stale path).
+
+## Promotion Rules (Eval → Paper Gate)
+
+A team advances to paper when ANY training iteration produces a strategy
+whose `eval gain_factor > 1.0` (final equity strictly greater than
+starting equity on the eval bars). Breakeven (`1.0`) and losses
+(`< 1.0`) do NOT advance. The check lives in `orchestrator.py` (around
+the `if ev.gain_factor > 1.0:` branch); `gain_factor =
+final_equity / starting_equity` over the eval window.
+
+The orchestrator loops up to `config.agent.max_train_iterations` times.
+As soon as one iteration crosses the threshold, that iteration's
+strategy is promoted to paper and the round ends for that team. If the
+budget exhausts without any iteration crossing 1.0, the harness writes
+`FAILED.json` with `cause: "max_iterations_exhausted"`,
+`last_gain_factor`, and the per-iteration `gain_factor` history. The
+team's `paper/<team>/` directory is pre-created but stays empty, and the
+team's composite for the round is `0.0`.
+
+### Reading the leaderboard during failure scenarios
+
+`+0.0000` for every team in `leaderboard.md`, combined with a
+`FAILED.json` under each `eval/<team>/`, means the gate worked
+correctly — no team produced a profitable eval-window strategy. This is
+not a code bug; it is a real signal that no team cleared the bar.
+Verify with:
+
+```bash
+for f in runs/<id>/round_NN/eval/*/FAILED.json; do
+  team=$(basename $(dirname $f))
+  gf=$(jq -r .last_gain_factor $f)
+  echo "$team gain=$gf"
+done
+```
+
+A scoreboard of `+0.0000` with empty `paper/<team>/` directories is
+indistinguishable at a glance from teams that paper-traded and broke
+even — always cross-check `FAILED.json` presence before drawing
+conclusions.
+
+### All-teams-fail triage
+
+When every team fails the gate, work through these causes in order:
+
+1. **`max_train_iterations` is too small.** The default is `5`. For
+   stress runs or harder eval windows, bump to `8`–`10` in
+   `config.yaml` and re-run.
+2. **The eval-window market regime is genuinely difficult.** A flat or
+   adversarial regime can defeat a healthy roster. Try a different
+   eval-window date range and re-run before blaming the teams.
+3. **Team strategies are mis-specified for the asset.** If teams were
+   scaffolded against a different instrument or timeframe, regenerate
+   them with priors that match the current `instrument` /
+   `bar_type`.
+4. **Check regime balance**: Read `runs/<run-id>/round_<N>/regime_check.json`.
+   If `warning_triggered: true`, the eval window's regime diverges
+   sharply from the train window — teams may have trained on a
+   different market state than they were evaluated on. This is a known
+   cause of all-teams-fail.
+
+Do NOT respond by raising or removing the `> 1.0` threshold. That
+hides the failure rather than fixing it; a team that breaks even on
+eval has not earned paper.
+
+## Regime-Balance Check
+
+The framework computes a buy-and-hold (B&H) baseline over both train
+and eval windows and emits a warning if the magnitudes diverge by more
+than `regime_check_threshold` (default 0.15).
+
+Outputs:
+- Stdout: `[regime-warning] Round N: train B&H=... eval B&H=... Δ=...`
+- Log: `regime-mismatch round=N train_bh=... eval_bh=... delta=...`
+- Artifact: `runs/<run-id>/round_<N>/regime_check.json`
+- Leaderboard: "Eval Window B&H Baseline" section with optional warning callout
+
+Tuning: increase `regime_check_threshold` in config.yaml if your
+instrument's natural volatility produces frequent false-positive
+warnings.
+
 ## Triage — reading `FAILED` / `FAILED.json`
 
 When a team exhausts `max_train_iterations` without ever returning a
@@ -185,6 +290,21 @@ used). Read it for the per-iteration rationale.
 A failed team's row in `leaderboard.md` shows the FAILED status and is
 ranked at the bottom; the team still gets the leaderboard announcement
 in `incoming/`, so it can adapt next round.
+
+### Live-paper run-level aborts (separate from team `FAILED`)
+
+When the run itself aborts before any team trades — i.e., the live
+`TradingNode` never builds — the failure surfaces as a Python
+exception, not a `FAILED.json`. Common root-cause buckets:
+
+| Exception | Bucket |
+|---|---|
+| `MissingBinanceCredentialsError` | One of `BINANCE_TESTNET_API_KEY` / `_API_SECRET` / `_ED25519_KEY_PATH` is unset after env loading. Fail-fast guard in `paper_phase._run_live`. |
+| `HttpClientBuildError("builder error")` | rustls couldn't find / read the system CA bundle. `SSL_CERT_FILE` unset or pointing at a non-existent file. |
+
+Both are diagnosed in skill
+`nautilus-competition-live-paper-troubleshooting`. Run the pre-flight
+one-liners above before re-invoking `compete run --paper-mode live`.
 
 ## Running the hermetic demo
 

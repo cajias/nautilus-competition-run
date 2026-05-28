@@ -1,8 +1,8 @@
 # round 0 iter 0
 
 - prev_gain: None
-- lookback_bars: 500
-- disagree_threshold: 0.15
+- lookback_bars: 200
+- disagree_threshold: 0.08
 - drawdown_cap: 0.2
-- weights: trend=0.186 mr=0.343 vol=0.471
-- notes: Iter 0 cold start. prev_gain=None, no leaderboard, no researcher JSON. Budget conference only (experience-sharing and extreme-market sit out without prior loss signal). lookback=500 5min-bars (~1.7d) keeps the 3x3 spoke-signal correlation matrix well-conditioned while leaving ~5548 signal bars on the 21-day eval window. max_weight_per_spoke=0.6 prevents mono-spoke collapse but lets HRP express conviction when one cluster dominates. drawdown_cap=0.20 tight to over-index the composite's 0.2 max_drawdown weight (HRPs whole point is drawdown-aware diversification). disagree_threshold=0.15 well above the 0.05 critic floor to suppress trade-fee bleed on weak composites. Spoke periods 100/30/30 give orthogonal horizons (8.3h trend slope, 2.5h mean-rev z-score, 2.5h realized-vol delta) so HRPs distance metric can actually cluster them rather than collapsing to near-equal weights.
+- weights: trend=0.155 mr=0.344 vol=0.501
+- notes: [active_kernel=flat realized_30bar=+0.00171] Iter 0, prev_gain=None: budget conference only (no experience-sharing or extreme-market). Researcher reports active_kernel=flat with 30-bar drift +0.17% — range regime. Bias HRP toward mean-reversion as primary signal: short HRP lookback (200 bars) to keep correlation matrix responsive, mr_period=40 z-score window, vol_period=30 short RV-delta as orthogonal diversifier, trend_period=60 to capture micro-trends rather than long-horizon drift in a flat tape. disagree_threshold lowered to 0.08 (well above 0.05 critic floor) to ensure the strategy actually trades — flat/no-trade implies gain_factor=1.0 which fails the strict eval gate. max_weight_per_spoke=0.6 caps any single-spoke dominance and forces HRP diversification across the cluster tree. drawdown_cap=0.20 protects the 0.2 composite max_drawdown weight without strangling the strategy. No spoke zeroed-out (no extreme-market trigger this iter).

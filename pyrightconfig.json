@@ -1,7 +1,7 @@
 {
   "venvPath": "../nautilus-competition",
   "venv": ".venv",
-  "include": ["competition_2/teams"],
+  "include": ["competition_2/teams", "competition_2/scripts"],
   "exclude": [
     "**/attempts/**",
     "**/runs/**",

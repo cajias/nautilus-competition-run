@@ -86,6 +86,18 @@ OFI_ENTRY_QUANTILE_TIGHTEN = 0.05
 MIN_SIGNAL_RATE = 0.005
 MAX_SIGNAL_RATE = 0.25
 
+# Regime gate: realized return over the last N closes selects long/short branch.
+# A positive train-side regime call still allows short to fire if live realized
+# return flips negative, and vice versa — the live gate is authoritative.
+REGIME_RETURN_BARS = 30
+# |regime return| below this is treated as flat — only confluence trades fire.
+REGIME_FLAT_THRESHOLD = 0.001  # 10 bps over 30 closes
+
+# Regime labels persisted in runtime_rules.json.
+REGIME_LONG = "long"
+REGIME_SHORT = "short"
+REGIME_FLAT = "flat"
+
 # Default per-trade trade size (BTC).
 DEFAULT_TRADE_SIZE_BTC = Decimal("0.02")
 
@@ -119,23 +131,43 @@ class TeamConfig(StrategyConfig, frozen=True):
     stop_loss_pct: float = 0.01
     # Max bars held before forced exit (in case no signal fires to close)
     max_hold_bars: int = 3
+    # Regime gate (set at train-time from realized return over last N closes
+    # of the train window). The live strategy refines this on the fly using
+    # the same window over the live close buffer.
+    regime: str = REGIME_FLAT  # one of "long" | "short" | "flat"
+    regime_return_bars: int = REGIME_RETURN_BARS
+    regime_flat_threshold: float = REGIME_FLAT_THRESHOLD
 
 
 class TeamStrategy(Strategy):
-    """OFI + VPIN tactical-long Strategy.
+    """OFI + VPIN tactical Strategy with symmetric long/short branches.
 
-    Live logic:
+    Live logic (preserves market-making spirit — provides liquidity into
+    persistent imbalance, exits on mean-reversion / toxicity):
         on_bar:
           1. Compute per-bar OFI proxy.
           2. Maintain persistent_ofi = rolling sum over ofi_k_bars.
           3. Maintain VPIN via cumulative volume bucket.
           4. Maintain realized-vol rolling std (with prior).
-          5. Gate: VPIN <= vpin_permit_threshold
-                   AND persistent_ofi >= ofi_entry_threshold
-                   AND rv_now <= rv_cap
-          6. If flat and gate passes: BUY trade_size.
-          7. If long: exit on stop-loss OR VPIN breach OR max_hold_bars OR
-             sign(ofi_bar) < 0 for the current bar.
+          5. Maintain a close buffer; live regime = sign of realized return
+             over the last `regime_return_bars` closes (falls back to the
+             train-time regime label until the buffer fills).
+          6. Branch selection:
+               - regime == "long":  trade only the long branch
+               - regime == "short": trade only the short branch
+               - regime == "flat":  require BOTH branches' confluence
+                                    (here: long requires +OFI persistence
+                                    AND a positive intra-bar tick; short the
+                                    inverse) — effectively reduces to no-trade
+                                    unless the bar agrees with the OFI side.
+          7. Long entry gate:  VPIN <= vpin_permit
+                               AND persistent_ofi >= +ofi_entry_threshold
+                               AND rv_now <= rv_cap
+          8. Short entry gate: VPIN <= vpin_permit
+                               AND persistent_ofi <= -ofi_entry_threshold
+                               AND rv_now <= rv_cap
+          9. Position management: stop-loss in the appropriate direction,
+             VPIN breach, OFI sign flip against the position, or max_hold_bars.
     """
 
     def __init__(self, config: TeamConfig) -> None:
@@ -148,12 +180,16 @@ class TeamStrategy(Strategy):
         self._vpin_vol_buffer: list[float] = []
         # Returns buffer for realized vol
         self._ret_buffer: list[float] = []
+        # Close buffer for regime detection (sized to regime_return_bars + 1)
+        self._close_buffer: list[float] = []
         # Prior close for return computation
         self._prev_close: float | None = None
         # Running estimate of std used for BVC sigma — seeded to RV prior
         self._bvc_sigma: float = max(config.rv_prior, 1e-9)
-        # Position state
-        self._long_entry_price: float | None = None
+        # Position state — one side at a time. `_pos_side` is +1 for long,
+        # -1 for short, 0 for flat.
+        self._pos_side: int = 0
+        self._entry_price: float | None = None
         self._bars_held: int = 0
 
     # ---- lifecycle ------------------------------------------------------- #
@@ -167,15 +203,22 @@ class TeamStrategy(Strategy):
         self.subscribe_bars(self.config.bar_type)
         self.log.info(
             f"OFI-VPIN strategy armed: "
-            f"ofi_threshold={self.config.ofi_entry_threshold:.4f} "
+            f"ofi_threshold=±{self.config.ofi_entry_threshold:.4f} "
             f"vpin_threshold={self.config.vpin_permit_threshold:.4f} "
             f"rv_cap={self.config.rv_cap:.6f} "
-            f"k_bars={self.config.ofi_k_bars}"
+            f"k_bars={self.config.ofi_k_bars} "
+            f"regime={self.config.regime} "
+            f"regime_bars={self.config.regime_return_bars}"
         )
 
     def on_stop(self) -> None:
         self.cancel_all_orders(self.config.instrument_id)
         self.unsubscribe_bars(self.config.bar_type)
+        # Best-effort flatten — if we still hold inventory at engine stop the
+        # paper P&L would be marked open. The live engine will close on stop
+        # too, but emit a clean exit ourselves for log clarity.
+        if self._pos_side != 0:
+            self._close_position("on_stop")
 
     # ---- core loop ------------------------------------------------------- #
 
@@ -226,69 +269,139 @@ class TeamStrategy(Strategy):
         total_vol = sum(self._vpin_vol_buffer)
         vpin_now = sum(self._vpin_buffer) / total_vol if total_vol > 0 else 0.0
 
-        # ---- 4. live critic: pure Python gate set ----------------------- #
+        # ---- 4. close-buffer + live regime detection -------------------- #
+        self._close_buffer.append(c)
+        # Keep one extra so we can compute (last - first)/first over N bars.
+        max_buf = self.config.regime_return_bars + 1
+        if len(self._close_buffer) > max_buf:
+            self._close_buffer.pop(0)
+        live_regime = self._compute_live_regime()
+
+        # ---- 5. live critic: pure Python gate set ----------------------- #
         vpin_permit = vpin_now <= self.config.vpin_permit_threshold
-        ofi_permit = persistent_ofi >= self.config.ofi_entry_threshold
         rv_permit = rv_now <= self.config.rv_cap
+        long_ofi_permit = persistent_ofi >= self.config.ofi_entry_threshold
+        short_ofi_permit = persistent_ofi <= -self.config.ofi_entry_threshold
+
+        # Regime branch selection. `live_regime` falls back to train-time
+        # regime when the close buffer hasn't filled.
+        if live_regime == REGIME_LONG:
+            allow_long, allow_short = True, False
+        elif live_regime == REGIME_SHORT:
+            allow_long, allow_short = False, True
+        else:  # REGIME_FLAT — require confluence: OFI persistence + bar agreement
+            allow_long = long_ofi_permit and ofi_bar > 0.0
+            allow_short = short_ofi_permit and ofi_bar < 0.0
 
         self.log.debug(
             f"bar: c={c:.2f} ofi={ofi_bar:+.2f} pers_ofi={persistent_ofi:+.2f} "
-            f"vpin={vpin_now:.3f} rv={rv_now:.6f} "
-            f"gates: vpin={vpin_permit} ofi={ofi_permit} rv={rv_permit}"
+            f"vpin={vpin_now:.3f} rv={rv_now:.6f} regime={live_regime} "
+            f"gates: vpin={vpin_permit} long_ofi={long_ofi_permit} "
+            f"short_ofi={short_ofi_permit} rv={rv_permit} "
+            f"allow_long={allow_long} allow_short={allow_short}"
         )
 
-        # ---- 5. position management ------------------------------------- #
-        if self._long_entry_price is not None:
+        # ---- 6. position management ------------------------------------- #
+        if self._pos_side != 0 and self._entry_price is not None:
             self._bars_held += 1
             exit_reason: str | None = None
-            if c <= self._long_entry_price * (1.0 - self.config.stop_loss_pct):
-                exit_reason = "stop_loss"
-            elif not vpin_permit:
-                exit_reason = "vpin_breach"
-            elif ofi_bar < 0.0:
-                exit_reason = "ofi_flip"
-            elif self._bars_held >= self.config.max_hold_bars:
-                exit_reason = "max_hold"
+            stop = self.config.stop_loss_pct
+            if self._pos_side > 0:
+                # Long: stop on drawdown; exit on intra-bar negative pressure
+                # (mean-reversion / OFI flip) or VPIN breach or max_hold.
+                if c <= self._entry_price * (1.0 - stop):
+                    exit_reason = "stop_loss"
+                elif not vpin_permit:
+                    exit_reason = "vpin_breach"
+                elif ofi_bar < 0.0:
+                    exit_reason = "ofi_flip"
+                elif self._bars_held >= self.config.max_hold_bars:
+                    exit_reason = "max_hold"
+            else:
+                # Short: mirror — stop on rally, VPIN breach, OFI flip up,
+                # or max_hold.
+                if c >= self._entry_price * (1.0 + stop):
+                    exit_reason = "stop_loss"
+                elif not vpin_permit:
+                    exit_reason = "vpin_breach"
+                elif ofi_bar > 0.0:
+                    exit_reason = "ofi_flip"
+                elif self._bars_held >= self.config.max_hold_bars:
+                    exit_reason = "max_hold"
             if exit_reason is not None:
-                self._close_long(exit_reason)
+                self._close_position(exit_reason)
             return
 
-        # ---- 6. entry --------------------------------------------------- #
+        # ---- 7. entry --------------------------------------------------- #
         # Entry requires at least k bars of OFI history (persistent_ofi defined).
         if len(self._ofi_buffer) < self.config.ofi_k_bars:
             return
-        if vpin_permit and ofi_permit and rv_permit:
-            self._open_long(c)
+        if not (vpin_permit and rv_permit):
+            return
+        if allow_long and long_ofi_permit:
+            self._open_position(side=1, entry_price=c)
+        elif allow_short and short_ofi_permit:
+            self._open_position(side=-1, entry_price=c)
 
     # ---- helpers --------------------------------------------------------- #
 
-    def _open_long(self, entry_price: float) -> None:
-        if self.instrument is None:
-            return
-        order = self.order_factory.market(
-            instrument_id=self.config.instrument_id,
-            order_side=OrderSide.BUY,
-            quantity=self.instrument.make_qty(self.config.trade_size),
-            time_in_force=TimeInForce.GTC,
-        )
-        self.submit_order(order)
-        self._long_entry_price = entry_price
-        self._bars_held = 0
-        self.log.info(f"ENTRY @ {entry_price:.2f}")
+    def _compute_live_regime(self) -> str:
+        """Sign of realized return over the last `regime_return_bars` closes.
 
-    def _close_long(self, reason: str) -> None:
-        if self.instrument is None:
+        Falls back to the train-time regime label until the buffer has at
+        least `regime_return_bars + 1` samples (need first vs last close).
+        """
+        n = self.config.regime_return_bars
+        if len(self._close_buffer) <= n:
+            return self.config.regime
+        first = self._close_buffer[-(n + 1)]
+        last = self._close_buffer[-1]
+        if first <= 0.0:
+            return self.config.regime
+        ret = (last - first) / first
+        thr = self.config.regime_flat_threshold
+        if ret > thr:
+            return REGIME_LONG
+        if ret < -thr:
+            return REGIME_SHORT
+        return REGIME_FLAT
+
+    def _open_position(self, side: int, entry_price: float) -> None:
+        if self.instrument is None or side == 0:
             return
+        order_side = OrderSide.BUY if side > 0 else OrderSide.SELL
         order = self.order_factory.market(
             instrument_id=self.config.instrument_id,
-            order_side=OrderSide.SELL,
+            order_side=order_side,
             quantity=self.instrument.make_qty(self.config.trade_size),
             time_in_force=TimeInForce.GTC,
         )
         self.submit_order(order)
-        entry = self._long_entry_price or 0.0
-        self.log.info(f"EXIT ({reason}) entry={entry:.2f} bars_held={self._bars_held}")
-        self._long_entry_price = None
+        self._pos_side = side
+        self._entry_price = entry_price
+        self._bars_held = 0
+        label = "LONG" if side > 0 else "SHORT"
+        self.log.info(f"ENTRY {label} @ {entry_price:.2f}")
+
+    def _close_position(self, reason: str) -> None:
+        if self.instrument is None or self._pos_side == 0:
+            return
+        # Closing order is opposite of the position side.
+        order_side = OrderSide.SELL if self._pos_side > 0 else OrderSide.BUY
+        order = self.order_factory.market(
+            instrument_id=self.config.instrument_id,
+            order_side=order_side,
+            quantity=self.instrument.make_qty(self.config.trade_size),
+            time_in_force=TimeInForce.GTC,
+        )
+        self.submit_order(order)
+        entry = self._entry_price or 0.0
+        label = "LONG" if self._pos_side > 0 else "SHORT"
+        self.log.info(
+            f"EXIT {label} ({reason}) entry={entry:.2f} bars_held={self._bars_held}"
+        )
+        self._pos_side = 0
+        self._entry_price = None
         self._bars_held = 0
 
 
@@ -319,6 +432,12 @@ class Thresholds(NamedTuple):
     ofi_k_bars: int
     vpin_bucket_bars: int
     signal_fire_rate: float
+    # Regime label computed from the tail of the train window — persisted so
+    # the researcher can read it next iteration.
+    regime: str
+    # The realized return that produced the regime label (signed) — useful
+    # for the researcher to reason about strength of the signal, not just sign.
+    regime_return: float
 
 
 # ---- Role 1: researcher (LLM subprocess) --------------------------------- #
@@ -506,29 +625,41 @@ def _signal_engineer(ctx: object, prev_gain: float | None) -> Thresholds:
     ofi_q = min(ofi_q, 0.95)
     vpin_q = max(vpin_q, 0.30)
 
-    # ofi_entry: persistent-OFI distribution is signed — we gate on positive OFI,
-    # so use quantile of positive-only tail.
-    ofi_pos = ofi_series[ofi_series > 0]
-    ofi_entry = float(ofi_pos.quantile(ofi_q)) if len(ofi_pos) > 0 else 0.0
+    # ofi_entry: persistent-OFI distribution is signed. We use a single
+    # magnitude threshold gating BOTH long (≥ +ofi_entry) and short
+    # (≤ -ofi_entry). Take the quantile of |persistent_ofi| so the threshold
+    # is symmetric and not biased by any one side's tail.
+    ofi_abs = ofi_series.abs()
+    ofi_abs_pos = ofi_abs[ofi_abs > 0]
+    ofi_entry = float(ofi_abs_pos.quantile(ofi_q)) if len(ofi_abs_pos) > 0 else 0.0
     vpin_permit = float(vpin_series.quantile(vpin_q))
     rv_prior = float(rv_series.mean())
     rv_cap = float(rv_series.quantile(0.90))  # skip the top 10 % vol bars
 
-    # Count how often all three train-window gates would fire as a sanity check.
-    fires = (
-        (ofi_series >= ofi_entry)
-        & (vpin_series <= vpin_permit)
-        & (rv_series.reindex(df.index).bfill() <= rv_cap)
+    # Train-window regime: realized return over the last REGIME_RETURN_BARS
+    # closes. Lets the live strategy seed its regime before the trade-time
+    # close buffer fills.
+    regime, regime_ret = _compute_train_regime(df, REGIME_RETURN_BARS, REGIME_FLAT_THRESHOLD)
+
+    # Count how often gates would fire (either side) as a sanity check.
+    rv_aligned = rv_series.reindex(df.index).bfill()
+    fires_long = (
+        (ofi_series >= ofi_entry) & (vpin_series <= vpin_permit) & (rv_aligned <= rv_cap)
     )
-    fire_rate = float(fires.mean())
+    fires_short = (
+        (ofi_series <= -ofi_entry) & (vpin_series <= vpin_permit) & (rv_aligned <= rv_cap)
+    )
+    fire_rate = float((fires_long | fires_short).mean())
     logger.info(
-        "signal-engineer: ofi_entry=%.4f vpin_permit=%.4f rv_prior=%.6f "
-        "rv_cap=%.6f fire_rate=%.4f (tighten=%s)",
+        "signal-engineer: ofi_entry=±%.4f vpin_permit=%.4f rv_prior=%.6f "
+        "rv_cap=%.6f fire_rate=%.4f regime=%s regime_ret=%+.5f (tighten=%s)",
         ofi_entry,
         vpin_permit,
         rv_prior,
         rv_cap,
         fire_rate,
+        regime,
+        regime_ret,
         tighten,
     )
     return Thresholds(
@@ -539,7 +670,28 @@ def _signal_engineer(ctx: object, prev_gain: float | None) -> Thresholds:
         ofi_k_bars=TRADE_OFI_K,  # trade-time k, not train-time k
         vpin_bucket_bars=VPIN_BUCKET_BARS,
         signal_fire_rate=fire_rate,
+        regime=regime,
+        regime_return=regime_ret,
     )
+
+
+def _compute_train_regime(
+    df: pd.DataFrame, n_bars: int, flat_threshold: float
+) -> tuple[str, float]:
+    """Return ("long" | "short" | "flat", realized_return) over the tail."""
+    closes = df["close"].astype(float)
+    if len(closes) < n_bars + 1:
+        return REGIME_FLAT, 0.0
+    first = float(closes.iloc[-(n_bars + 1)])
+    last = float(closes.iloc[-1])
+    if first <= 0.0:
+        return REGIME_FLAT, 0.0
+    ret = (last - first) / first
+    if ret > flat_threshold:
+        return REGIME_LONG, ret
+    if ret < -flat_threshold:
+        return REGIME_SHORT, ret
+    return REGIME_FLAT, ret
 
 
 # ---- Roles 2,3,4,5,7,8: deterministic pipeline --------------------------- #
@@ -590,6 +742,11 @@ def _risk_officer(
         "max_hold_bars": 3,
         "critic_warnings": critic_warnings,
         "train_signal_fire_rate": thresholds.signal_fire_rate,
+        # Regime decision persisted for the researcher subagent to read.
+        "regime": thresholds.regime,
+        "regime_return": thresholds.regime_return,
+        "regime_return_bars": REGIME_RETURN_BARS,
+        "regime_flat_threshold": REGIME_FLAT_THRESHOLD,
     }
     iter_dir = ATTEMPTS_DIR / f"{iter_idx:03d}"
     iter_dir.mkdir(parents=True, exist_ok=True)
@@ -620,10 +777,11 @@ def _memory_keeper(ctx: object, iter_idx: int, rules: dict[str, Any]) -> None:
         f"\n\n---\n"
         f"## round={round_idx} iter={iter_idx}\n"
         f"- prev_gain: {prev_gain}\n"
-        f"- ofi_entry: {rules['ofi_entry_threshold']:.4f}\n"
+        f"- ofi_entry: ±{rules['ofi_entry_threshold']:.4f}\n"
         f"- vpin_permit: {rules['vpin_permit_threshold']:.4f}\n"
         f"- rv_cap: {rules['rv_cap']:.6f}\n"
         f"- fire_rate: {rules['train_signal_fire_rate']:.4f}\n"
+        f"- regime: {rules['regime']} (ret={rules['regime_return']:+.5f})\n"
         f"- critic: {rules['critic_warnings']}"
         f"{lb_note}\n"
     )
@@ -693,5 +851,8 @@ def train(ctx: object) -> tuple[type[TeamStrategy], TeamConfig]:
         vpin_bucket_bars=thresholds.vpin_bucket_bars,
         rv_prior=thresholds.rv_prior,
         rv_cap=thresholds.rv_cap,
+        regime=thresholds.regime,
+        regime_return_bars=REGIME_RETURN_BARS,
+        regime_flat_threshold=REGIME_FLAT_THRESHOLD,
     )
     return TeamStrategy, cfg

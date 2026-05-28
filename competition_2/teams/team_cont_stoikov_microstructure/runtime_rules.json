@@ -1,12 +1,16 @@
 {
-  "ofi_entry_threshold": 89.79597637965682,
+  "ofi_entry_threshold": 111.43844039352805,
   "ofi_k_bars": 2,
-  "vpin_permit_threshold": 0.556087114987595,
+  "vpin_permit_threshold": 0.5471327354909082,
   "vpin_bucket_bars": 50,
-  "rv_prior": 0.001436607681764813,
-  "rv_cap": 0.0027241734275027605,
+  "rv_prior": 0.0012653543983034965,
+  "rv_cap": 0.002216452716410872,
   "stop_loss_pct": 0.01,
   "max_hold_bars": 3,
   "critic_warnings": [],
-  "train_signal_fire_rate": 0.04442541856925419
+  "train_signal_fire_rate": 0.05941358024691358,
+  "regime": "long",
+  "regime_return": 0.001710893013424233,
+  "regime_return_bars": 30,
+  "regime_flat_threshold": 0.001
 }

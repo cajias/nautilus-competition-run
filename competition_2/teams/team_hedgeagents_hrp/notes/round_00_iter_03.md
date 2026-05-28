@@ -1,8 +1,8 @@
 # round 0 iter 3
 
-- prev_gain: -0.0001356763700000041
-- lookback_bars: 700
-- disagree_threshold: 0.06
-- drawdown_cap: 0.2
-- weights: trend=0.212 mr=0.388 vol=0.400
-- notes: Iter 3. prev_gain=-1.35e-4 (4th micro-loss in a row: iter0=-4.19e-5, iter1=-3.0e-04, iter2=-1.35e-04). Budget + experience-sharing fire; extreme-market does NOT (|loss| << 10pct floor, no >=1pct consecutive losses). Diagnosis carried forward from iter 2: persistent under-trading / fee-bleed on marginal trades, NOT risk overshoot — composite barely clears 0.07 gate, takes ~1 round-trip, loses the spread. Rotation pattern this run: lookback 500->200->350->700 (probing long end, prior runs explored 200..500). 700 ~ 2.4 days of 5-min bars, well under critic floor min(1000, 0.2*len(train_bars)). Pivots: (1) lookback 350->700 to test long-regime end of search per experience-sharing rotation; (2) disagree_threshold 0.07->0.06 (still >0.05 floor) to admit more medium-conviction composites — drawdown_cap=0.20 protects downside, so bleed-tolerance is acceptable for upside capture; (3) trend_period 60->80 to scale with longer lookback while keeping horizon gap vs mr_period=20 (4x ratio for HRP cluster separation); (4) mr_period=20, vol_period=30 unchanged (already orthogonal); (5) max_weight_per_spoke=0.6 held — extreme-market did not trigger; (6) drawdown_cap=0.20 held — over-indexes composite's 0.2 max_drawdown weight (team's scoring edge). Researcher JSON absent at attempts/003/research.json (subprocess timeout pattern); operating on memory-keeper trail + CLAUDE.md priors. File write to attempts/003/hub_manager.json may be blocked by harness sandbox — stdout is authoritative per CLAUDE.md contract.
+- prev_gain: -0.00033678913000001476
+- lookback_bars: 100
+- disagree_threshold: 0.05
+- drawdown_cap: 0.25
+- weights: trend=0.183 mr=0.346 vol=0.470
+- notes: Iter 3 (4th consecutive sub-bp loss, prev_gain=-3.4e-4). Three losses in a row triggers extreme-market conference per CLAUDE.md (>=2 consecutive prev_gain<=0), but losses are sub-bp << -10% so no spoke zero-out. Diagnosis: range regime confirmed; allocator pathology — vol_carry hoarded 71.7% in iter 2 while mean_rev (the structural winner in range) was stranded at 10.3%. Triple-fix per researcher: (a) max_weight_per_spoke 0.6→0.45 to forcibly break vol_carry monopoly and route budget to mean-rev cluster; (b) hrp_lookback_bars 150→100 to track BTC 5-min reversion half-life and rotate lookback after 4 losses (experience-sharing conference); (c) shorten all spoke periods (trend 50→30, mr 60→30, vol 60→30) so mean-rev z-score variance dominates HRP inverse-variance bisection arithmetic, which currently mistakes vol_carry's smoothness for low risk. Keep disagree_threshold at 0.05 floor and drawdown_cap=0.25. Contingency: if iter 4 still loses, force vol_carry zero-out (true extreme-market spoke cap).

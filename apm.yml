@@ -4,7 +4,7 @@ description: APM project for nautilus-competition-run
 author: Raul
 dependencies:
   apm:
-  - cajias/nautilus-competition
+  - cajias/nautilus-competition#2e49ef5
   mcp: []
 includes: auto
 scripts: {}

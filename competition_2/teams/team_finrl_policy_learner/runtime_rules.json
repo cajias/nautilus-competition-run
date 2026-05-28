@@ -5,6 +5,7 @@
   "min_warmup_bars": 65,
   "feature_window_returns": 32,
   "feature_window_vol": 64,
-  "momentum_short": 5,
-  "momentum_long": 60
+  "momentum_short": 2,
+  "momentum_long": 30,
+  "signal_threshold": 1.0
 }

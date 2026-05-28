@@ -136,7 +136,7 @@ def _keltner_final(
         mid = float(close[-1]) if len(close) else 0.0
         a = float(atr_series[-1]) if len(atr_series) else 0.0
         return mid, mid + k * a, mid - k * a
-    mid = float(pd.Series(close).rolling(period).mean().iloc[-1])
+    mid = float(np.asarray(pd.Series(close).rolling(period).mean())[-1])
     a = float(atr_series[-1])
     return mid, mid + k * a, mid - k * a
 
@@ -167,11 +167,90 @@ def _researcher_should_run(prev_gain: float | None, iteration: int) -> bool:
     return False
 
 
+# -----------------------------------------------------------------------------
+# Paradigm selection (CLAUDE.md compliance: prev_gain<0 must consider swap).
+# -----------------------------------------------------------------------------
+PARADIGM_TSMOM = "tsmom"
+PARADIGM_COUNTER_TSMOM = "counter_tsmom"
+PARADIGM_CASH = "cash"
+
+# Cash-mode threshold: skip trades when |realized_30bar_log_return| < this value.
+# 0.5% on 30 5-min bars = 2.5h window — meaningful directional movement.
+DEFAULT_CASH_THRESHOLD: float = 0.005
+CASH_LOOKBACK_BARS: int = 30
+
+
+def _read_prior_paradigm(rules_path: Path) -> str | None:
+    """Read the paradigm from the prior runtime_rules.json, if present.
+
+    Returns None on missing file / malformed content.
+    """
+    if not rules_path.exists():
+        return None
+    try:
+        prior = json.loads(rules_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    paradigm = prior.get("paradigm")
+    if isinstance(paradigm, str) and paradigm in (
+        PARADIGM_TSMOM,
+        PARADIGM_COUNTER_TSMOM,
+        PARADIGM_CASH,
+    ):
+        return paradigm
+    return None
+
+
+def _select_paradigm(
+    prev_paradigm: str | None,
+    prev_gain: float | None,
+    iteration: int,
+    round_index: int,
+    last_paradigm_round: int | None,
+) -> str:
+    """Pick the paradigm for this iteration.
+
+    Three-paradigm rotation (TSMOM → counter_tsmom → cash → TSMOM …):
+      - iter 0 cold start: tsmom.
+      - prev_gain >= 0: keep prev_paradigm (it's working — don't flip).
+      - prev_gain < 0 AND prev_paradigm == tsmom: SWAP to counter_tsmom.
+      - prev_gain < 0 AND prev_paradigm == counter_tsmom AND same round as
+        the swap: SWAP to cash (no oscillation within a round means we
+        rotate forward, not back).
+      - prev_gain < 0 AND prev_paradigm == counter_tsmom AND new round:
+        rotate to cash (third paradigm — neither momentum direction worked).
+      - prev_gain < 0 AND prev_paradigm == cash AND same round: STAY on
+        cash (oscillation guard — cash within the round means we wait for
+        the next round to re-evaluate).
+      - prev_gain < 0 AND prev_paradigm == cash AND new round: rotate back
+        to tsmom (fresh round, retry classical from the top of the cycle).
+    """
+    if prev_paradigm is None:
+        return PARADIGM_TSMOM
+    if prev_gain is None or prev_gain >= 0.0:
+        return prev_paradigm
+    # prev_gain < 0 — losing strategy. Rotate forward.
+    if prev_paradigm == PARADIGM_TSMOM:
+        return PARADIGM_COUNTER_TSMOM
+    if prev_paradigm == PARADIGM_COUNTER_TSMOM:
+        # Counter-TSMOM lost — rotate to cash regardless of round (cash is
+        # the next station in the rotation; oscillation guard is satisfied
+        # because we are advancing forward, not flipping back).
+        return PARADIGM_CASH
+    # prev_paradigm == cash and we lost.
+    if last_paradigm_round is not None and last_paradigm_round == round_index:
+        # Same round as switching to cash — stay (oscillation guard).
+        return PARADIGM_CASH
+    # New round: rotate back to TSMOM and try the cycle fresh.
+    return PARADIGM_TSMOM
+
+
 def _run_researcher(
     workspace_dir: Path,
     iteration: int,
     prev_gain: float | None,
     timeout_s: int,
+    paradigm: str,
 ) -> str | None:
     """Dispatch a ~120s Claude subagent; return the path to the research note.
 
@@ -197,16 +276,48 @@ def _run_researcher(
         if prev_gain is not None and prev_gain < 0.0
         else f"- prev_gain: {prev_gain!r}"
     )
+    if paradigm == PARADIGM_COUNTER_TSMOM:
+        paradigm_block = (
+            "PARADIGM: counter_tsmom (INVERTED). The desk has SWAPPED out of\n"
+            "long-bias TSMOM because the prior iteration lost money. The Strategy\n"
+            "now SHORTS on positive EWMA of returns and GOES LONG on negative\n"
+            "EWMA — the trend-exhaustion / mean-reversion regime. DO NOT propose\n"
+            "swapping back to long-bias TSMOM. Tune for counter-TSMOM: shorter\n"
+            "lookbacks tend to work better (faster reversals), and the breakout\n"
+            "gate should be loosened (channel breaches in trending direction\n"
+            "are the FADE signal, not the entry).\n"
+        )
+    elif paradigm == PARADIGM_CASH:
+        paradigm_block = (
+            "PARADIGM: cash (CASH-PRESERVATION MODE). You are in cash-\n"
+            "preservation mode. Both TSMOM and counter-TSMOM lost money in this\n"
+            "regime. The strategy now trades ONLY when realized 30-bar movement\n"
+            "exceeds the cash_threshold (default 0.5%). When movement is below\n"
+            "threshold the strategy holds cash (no-trade). Suggest the\n"
+            "cash_threshold parameter ONLY (a single float in (0, 0.05]) — do\n"
+            "NOT propose strategy changes, lookback changes, or paradigm\n"
+            "swaps. The aim is to survive the pure-noise regime by trading\n"
+            "only when there is genuine directional movement.\n"
+        )
+    else:
+        paradigm_block = (
+            "PARADIGM: tsmom (classical). Long on positive EWMA of returns,\n"
+            "short on negative. Tune lookbacks and the Keltner/ATR gate.\n"
+        )
     prompt = (
         f"You are the researcher role on a systematic TSMOM desk. "
         f"Iteration {iteration}.\n"
-        f"{prev_gain_line}\n\n"
+        f"{prev_gain_line}\n"
+        f"{paradigm_block}\n"
         f"Task: survey Moskowitz/Ooi/Pedersen (JFE 2012), "
         f"Hurst/Ooi/Pedersen (JPM 2017), and vol-targeting literature. "
+        f"If paradigm is counter_tsmom, also cite trend-exhaustion / "
+        f"mean-reversion lit (e.g. Lo/MacKinlay 1990, Jegadeesh 1990).\n"
         f"Then read ../../../docs/state-of-the-art/ (momentum sections only) "
         f"and any peer team notes under ../../teams/*/notes/ if present. "
         f"Write a short advisory markdown to attempts/{iteration:03d}/research.md "
-        f"with exactly these sections: THESIS (1 paragraph), "
+        f"with exactly these sections: THESIS (1 paragraph, must reflect the "
+        f"current paradigm), "
         f"RECOMMENDED_LOOKBACKS (short_span_bars, long_span_bars), "
         f"RECOMMENDED_VOL_TARGET (ann float), CITATIONS (<=5 papers), "
         f"RISKS (<=3 bullets). Keep under 600 words. Exit when file exists."
@@ -443,7 +554,12 @@ def _fit_indicators(df: pd.DataFrame, h: Hypothesis) -> dict[str, Any]:
     }
 
 
-def _test_window_sanity(df_test: pd.DataFrame, state: dict[str, Any], h: Hypothesis) -> float:
+def _test_window_sanity(
+    df_test: pd.DataFrame,
+    state: dict[str, Any],
+    h: Hypothesis,
+    paradigm: str,
+) -> float:
     """Single-shot OOS check: replay the rule on test and return the cumulative pnl proxy.
 
     Used ONLY to decide whether to accept the fit; not used for tuning.
@@ -457,6 +573,8 @@ def _test_window_sanity(df_test: pd.DataFrame, state: dict[str, Any], h: Hypothe
     # Simple shortcut: sign of long TSMOM at handoff applied to full test window,
     # scaled by size_scale. Not a true replay, but a fast sanity indicator.
     sign = state["long_sign_at_handoff"]
+    if paradigm == PARADIGM_COUNTER_TSMOM:
+        sign = -sign
     pnl = sign * state["size_scale"] * float(np.sum(log_ret))
     return pnl
 
@@ -469,12 +587,23 @@ def _write_runtime_rules(
     h: Hypothesis,
     critic_warnings: list[str],
     path: Path,
+    paradigm: str,
+    last_paradigm_round: int,
 ) -> None:
     rules = {
         "version": 1,
         "max_leverage": DEFAULT_MAX_LEVERAGE,
         "drawdown_circuit_breaker": DEFAULT_DD_CIRCUIT_BREAKER,
         "mom_reversal_exit": True,
+        # Paradigm carry-forward: read by Strategy on_start to decide whether
+        # to invert the TSMOM sign rule, hold cash, etc. Also read by next
+        # iteration's _select_paradigm to enforce no-oscillation-within-round.
+        "paradigm": paradigm,
+        "last_paradigm_round": last_paradigm_round,
+        # Cash-mode threshold. Only consulted when paradigm == "cash". The
+        # researcher (in cash mode) is the only role that may suggest a
+        # non-default value; deterministic roles persist the default.
+        "cash_threshold": DEFAULT_CASH_THRESHOLD,
         "hypothesis": {
             "short_span_bars": h.short_span_bars,
             "long_span_bars": h.long_span_bars,
@@ -504,6 +633,8 @@ def _append_memory(
     state: dict[str, Any],
     critic_warnings: list[str],
     test_pnl_proxy: float,
+    paradigm: str,
+    prev_paradigm: str | None,
 ) -> None:
     MEMORY_PATH.parent.mkdir(parents=True, exist_ok=True)
     prev_board = ctx.prev_round_leaderboard
@@ -512,6 +643,7 @@ def _append_memory(
         f"## round={ctx.round_index} iter={ctx.iteration}",
         f"- prev_gain: {ctx.prev_gain}",
         f"- prev_round_leaderboard: {prev_board_str}",
+        f"- paradigm: {paradigm} (prev_paradigm: {prev_paradigm})",
         f"- hypothesis: short={h.short_span_bars} long={h.long_span_bars} "
         f"keltner_k={h.keltner_k} atr_ratio={h.atr_expansion_ratio} "
         f"vol_target={h.ann_vol_target}",
@@ -534,6 +666,34 @@ def _append_memory(
 def train(ctx: Any) -> tuple[type["TeamStrategy"], TeamConfig]:
     iter_idx = int(ctx.iteration)
     prev_gain = ctx.prev_gain
+    round_idx = int(getattr(ctx, "round_index", 0) or 0)
+
+    # Read prior runtime_rules.json BEFORE we overwrite it. We need the
+    # paradigm and the round it was last set in for the no-oscillation guard.
+    prev_paradigm = _read_prior_paradigm(RUNTIME_RULES_PATH)
+    last_paradigm_round: int | None = None
+    if RUNTIME_RULES_PATH.exists():
+        try:
+            _prior = json.loads(RUNTIME_RULES_PATH.read_text())
+            lpr = _prior.get("last_paradigm_round")
+            if isinstance(lpr, int):
+                last_paradigm_round = lpr
+        except (OSError, json.JSONDecodeError):
+            last_paradigm_round = None
+
+    # Paradigm decision (CLAUDE.md compliance: prev_gain<0 must consider swap).
+    paradigm = _select_paradigm(
+        prev_paradigm=prev_paradigm,
+        prev_gain=prev_gain,
+        iteration=iter_idx,
+        round_index=round_idx,
+        last_paradigm_round=last_paradigm_round,
+    )
+    # If the paradigm changed this iteration, stamp the round it changed in
+    # so subsequent iterations within the same round don't re-flip it.
+    new_last_paradigm_round = (
+        round_idx if paradigm != prev_paradigm else (last_paradigm_round if last_paradigm_round is not None else round_idx)
+    )
 
     # Role 1: researcher — only on iter 0 or losing retries.
     if _researcher_should_run(prev_gain, iter_idx):
@@ -543,6 +703,7 @@ def train(ctx: Any) -> tuple[type["TeamStrategy"], TeamConfig]:
                 iteration=iter_idx,
                 prev_gain=prev_gain,
                 timeout_s=int(ctx.config.agent.per_train_timeout_seconds),
+                paradigm=paradigm,
             )
         except Exception as exc:
             logger.warning("researcher dispatch failed (non-fatal): %s", exc)
@@ -561,6 +722,7 @@ def train(ctx: Any) -> tuple[type["TeamStrategy"], TeamConfig]:
     (attempt_dir / "critic.md").write_text(
         "# critic.md\n\n"
         f"- hypothesis: {h}\n"
+        f"- paradigm: {paradigm} (prev: {prev_paradigm})\n"
         f"- train_bars: {len(train_df)}\n"
         f"- warnings: {critic_warnings}\n"
     )
@@ -571,13 +733,22 @@ def train(ctx: Any) -> tuple[type["TeamStrategy"], TeamConfig]:
     # Single-shot OOS on test window (legal per contract).
     test_handle = ctx.get_test_data()
     test_df = _load_bars(test_handle)
-    test_pnl_proxy = _test_window_sanity(test_df, state, h)
+    test_pnl_proxy = _test_window_sanity(test_df, state, h, paradigm)
 
     # Role 4: risk-officer — persist runtime rules.
-    _write_runtime_rules(state, h, critic_warnings, RUNTIME_RULES_PATH)
+    _write_runtime_rules(
+        state,
+        h,
+        critic_warnings,
+        RUNTIME_RULES_PATH,
+        paradigm=paradigm,
+        last_paradigm_round=new_last_paradigm_round,
+    )
 
     # Role 5: memory-keeper.
-    _append_memory(ctx, h, state, critic_warnings, test_pnl_proxy)
+    _append_memory(
+        ctx, h, state, critic_warnings, test_pnl_proxy, paradigm, prev_paradigm
+    )
 
     # Return Strategy class + config. Paths are strings so StrategyConfig
     # (msgspec) serializes cleanly.
@@ -612,6 +783,10 @@ class TeamStrategy(Strategy):
         self._rules: dict[str, Any] = {}
         self._state: dict[str, Any] = {}
         self._hypothesis: dict[str, Any] = {}
+        # Paradigm: "tsmom" (long-bias) or "counter_tsmom" (inverted/fade).
+        # When counter_tsmom, sign(EWMA) is INVERTED before the gate fires —
+        # i.e. positive EWMA → short, negative EWMA → long.
+        self._paradigm: str = PARADIGM_TSMOM
 
         # Live indicator state (bootstrapped from rules["state"]).
         self._prev_close: float | None = None
@@ -669,6 +844,23 @@ class TeamStrategy(Strategy):
 
         self._state = self._rules.get("state", {}) or {}
         self._hypothesis = self._rules.get("hypothesis", {}) or {}
+        # Paradigm — default to classical TSMOM if absent / unknown.
+        paradigm_raw = self._rules.get("paradigm", PARADIGM_TSMOM)
+        self._paradigm = (
+            paradigm_raw
+            if paradigm_raw in (
+                PARADIGM_TSMOM,
+                PARADIGM_COUNTER_TSMOM,
+                PARADIGM_CASH,
+            )
+            else PARADIGM_TSMOM
+        )
+        # Cash-mode threshold + return ring-buffer for the realized 30-bar
+        # movement check. Only used when self._paradigm == PARADIGM_CASH.
+        self._cash_threshold: float = float(
+            self._rules.get("cash_threshold", DEFAULT_CASH_THRESHOLD)
+        )
+        self._cash_close_history: list[float] = []
 
         # Bootstrap indicator state from the persisted final-train-bar values
         # (the momentum-carry-forward solution for the 8k-bar lookback problem).
@@ -706,7 +898,8 @@ class TeamStrategy(Strategy):
 
         self.subscribe_bars(self.config.bar_type)
         self.log.info(
-            f"TSMOM desk ready: size_scale={self._size_scale:.4f} "
+            f"TSMOM desk ready: paradigm={self._paradigm} "
+            f"size_scale={self._size_scale:.4f} "
             f"long_sign={_tsmom_sign(self._long_ewma)} "
             f"short_sign={_tsmom_sign(self._short_ewma)}"
         )
@@ -767,9 +960,49 @@ class TeamStrategy(Strategy):
         keltner_upper = keltner_mid + self._keltner_k * self._atr_now
         keltner_lower = keltner_mid - self._keltner_k * self._atr_now
 
+        # 3b. Cash-mode gate. When in cash paradigm we maintain a small
+        # ring-buffer of closes and only ALLOW the rest of the on_bar logic
+        # to fire when the realized log-return over the last
+        # CASH_LOOKBACK_BARS bars exceeds self._cash_threshold in absolute
+        # value. Below threshold = pure-noise regime → hold cash. Above =
+        # genuine movement → behave exactly like TSMOM (classical signs).
+        if self._paradigm == PARADIGM_CASH:
+            self._cash_close_history.append(close)
+            if len(self._cash_close_history) > CASH_LOOKBACK_BARS + 1:
+                self._cash_close_history = self._cash_close_history[
+                    -(CASH_LOOKBACK_BARS + 1):
+                ]
+            if len(self._cash_close_history) < CASH_LOOKBACK_BARS + 1:
+                # Still warming up the cash ring-buffer.
+                return
+            past_close = self._cash_close_history[0]
+            realized_return = (
+                math.log(close / past_close) if past_close > 0 else 0.0
+            )
+            if abs(realized_return) < self._cash_threshold:
+                # Pure-noise regime — hold cash. Flatten any open position
+                # and skip the entry gate entirely.
+                if self._position_side != 0:
+                    self._reconcile_position(0)
+                return
+
         # 4. Evaluate stacked entry gate.
-        long_sign = _tsmom_sign(self._long_ewma)
-        short_sign = _tsmom_sign(self._short_ewma)
+        # Raw TSMOM signs from EWMA of returns (classical Moskowitz rule).
+        raw_long_sign = _tsmom_sign(self._long_ewma)
+        raw_short_sign = _tsmom_sign(self._short_ewma)
+        # Paradigm-aware trade direction. For counter_tsmom we INVERT the
+        # signal: positive EWMA (classical "trend up" → buy) becomes a SHORT,
+        # negative EWMA becomes a LONG. This is the trend-exhaustion /
+        # mean-reversion regime used when classical TSMOM lost money in the
+        # prior iteration. For cash paradigm, when we reach this point the
+        # threshold has been crossed → behave like TSMOM (classical signs).
+        if self._paradigm == PARADIGM_COUNTER_TSMOM:
+            long_sign = -raw_long_sign
+            short_sign = -raw_short_sign
+        else:
+            # tsmom OR cash (above-threshold) — classical signs.
+            long_sign = raw_long_sign
+            short_sign = raw_short_sign
         agree = (long_sign != 0) and (long_sign == short_sign)
 
         # ATR expansion gate + critic veto.
@@ -779,12 +1012,24 @@ class TeamStrategy(Strategy):
         expansion_ok = atr_ratio >= self._atr_expansion_ratio
         critic_ok = atr_ratio >= self._critic_veto_atr_mult
 
-        # Breakout direction.
+        # Breakout direction. Note: we test the breakout against the
+        # (paradigm-adjusted) trade direction. For TSMOM, long_sign>0 means
+        # we want long → confirm with upward breakout. For counter_TSMOM,
+        # long_sign>0 means raw EWMA was negative (we inverted it) → we want
+        # long → confirm with a downward breakout (price has overshot to
+        # the downside, fade it).
         breakout_up = close > keltner_upper
         breakout_down = close < keltner_lower
-        breakout_matches = (
-            (long_sign > 0 and breakout_up) or (long_sign < 0 and breakout_down)
-        )
+        if self._paradigm == PARADIGM_COUNTER_TSMOM:
+            breakout_matches = (
+                (long_sign > 0 and breakout_down)
+                or (long_sign < 0 and breakout_up)
+            )
+        else:
+            breakout_matches = (
+                (long_sign > 0 and breakout_up)
+                or (long_sign < 0 and breakout_down)
+            )
 
         desired_side = 0
         if agree and expansion_ok and critic_ok and breakout_matches:
