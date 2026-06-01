@@ -15,6 +15,14 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+# Ensure the workspace root (parent of competition_3/) is on sys.path so that
+# strategy.py files can use `from competition_3.shared... import ...`.
+# When running as `uv run python competition_3/scripts/smoke_one_team.py`,
+# Python sets sys.path[0] to the scripts/ directory, NOT the workspace root.
+_WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_WORKSPACE_ROOT) not in sys.path:
+    sys.path.insert(0, str(_WORKSPACE_ROOT))
+
 import msgspec.structs
 from nautilus_competition.config import AgentSpec, load_competition_config
 
