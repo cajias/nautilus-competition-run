@@ -15,7 +15,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-from nautilus_competition.config import load_competition_config
+import msgspec.structs
+from nautilus_competition.config import AgentSpec, load_competition_config
 
 
 def load_team_module(team_dir: Path):
@@ -35,7 +36,11 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     config_path = Path(__file__).resolve().parent.parent / "config.yaml"
     cfg = load_competition_config(config_path)
-    cfg.agent.max_train_iterations = args.max_attempts
+    # AgentSpec is a frozen msgspec Struct — use replace() to override.
+    new_agent = msgspec.structs.replace(
+        cfg.agent, max_train_iterations=args.max_attempts
+    )
+    cfg = msgspec.structs.replace(cfg, agent=new_agent)
     team_dir = Path(__file__).resolve().parent.parent / "teams" / args.team
     if not team_dir.exists():
         print(f"team dir not found: {team_dir}", file=sys.stderr)
