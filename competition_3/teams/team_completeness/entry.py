@@ -76,6 +76,19 @@ def train(ctx):
     sys.modules[spec.name] = mod   # CRITICAL: dataclass introspection needs this
     spec.loader.exec_module(mod)
 
+    # Push inner-iterations count to pushgateway for the ablation comparison.
+    # Best-effort: never block return on observability failures.
+    try:
+        n = int((attempt_dir / "inner_iterations.txt").read_text().strip())
+        import requests
+        requests.post(
+            "http://localhost:9091/metrics/job/competition_3",
+            data=f'nautilus_competition_inner_iterations{{team="{TEAM_NAME}",round="{ctx.round_index}"}} {n}\n',
+            timeout=5,
+        )
+    except Exception:
+        pass
+
     instr = ctx.config.instrument
     cfg = mod.TeamStrategyConfig(
         instrument_id=InstrumentId.from_str(instr.symbol),

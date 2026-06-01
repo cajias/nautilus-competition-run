@@ -8,6 +8,7 @@ from competition_3.scripts.score_composite import (
     compute_win_rate,
     apply_floor,
     composite_score,
+    count_closed_trades,
     score_run,
 )
 
@@ -27,6 +28,16 @@ def test_compute_win_rate_empty_log(tmp_path: Path) -> None:
     log = tmp_path / "trades.jsonl"
     log.write_text("")
     assert compute_win_rate(log) == 0.0
+
+
+def test_count_closed_trades(tmp_path: Path) -> None:
+    log = tmp_path / "trades.jsonl"
+    log.write_text(
+        '{"event":"PositionClosed","realized_pnl":5.0}\n'
+        '{"event":"PositionClosed","realized_pnl":-1.0}\n'
+        '{"event":"OrderFilled","realized_pnl":0}\n'
+    )
+    assert count_closed_trades(log) == 2
 
 
 def test_apply_floor_below_gain_threshold() -> None:
@@ -60,3 +71,4 @@ def test_score_run_end_to_end(tmp_path: Path) -> None:
     }))
     out = score_run(run_dir)
     assert out["team_a"]["total_composite"] == pytest.approx(1.15 * (2 / 3))
+    assert out["team_a"]["rounds"][0]["closed_trades"] == 3

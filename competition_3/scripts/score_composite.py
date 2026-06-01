@@ -49,6 +49,17 @@ def apply_floor(gain: float, win_rate: float) -> float:
     return composite_score(gain, win_rate)
 
 
+def count_closed_trades(trades_jsonl: Path) -> int:
+    """Count PositionClosed events in a trades log."""
+    if not trades_jsonl.exists():
+        return 0
+    count = 0
+    for line in trades_jsonl.read_text().splitlines():
+        if line.strip() and json.loads(line).get("event") == "PositionClosed":
+            count += 1
+    return count
+
+
 def score_run(run_dir: Path) -> dict:
     """Score every team in every round of a harness run."""
     leaderboard = json.loads((run_dir / "leaderboard.json").read_text())
@@ -58,25 +69,29 @@ def score_run(run_dir: Path) -> dict:
         for t in round_entry.get("teams", []):
             name = t["name"]
             gain = 1.0 + float(t.get("total_return", 0))
-            wr = compute_win_rate(
-                run_dir / "teams" / name / f"round_{rnum}" / "paper_trades.jsonl"
-            )
+            trades_log = run_dir / "teams" / name / f"round_{rnum}" / "paper_trades.jsonl"
+            wr = compute_win_rate(trades_log)
             score = apply_floor(gain, wr)
+            closed_trades = count_closed_trades(trades_log)
             slot = out.setdefault(name, {"rounds": [], "total_composite": 0.0})
             slot["rounds"].append({"round": rnum, "gain": gain, "win_rate": wr,
-                                    "composite_score": score})
+                                    "composite_score": score, "closed_trades": closed_trades})
             slot["total_composite"] += score
     return out
 
 
 def push_to_pushgateway(out: dict, run_id: str, url: str) -> None:
-    """Push nautilus_competition_composite_score{team,round} for each round."""
+    """Push nautilus_competition_composite_score AND nautilus_competition_paper_trades_closed."""
     lines = []
     for team, payload in out.items():
         for r in payload["rounds"]:
             lines.append(
                 f'nautilus_competition_composite_score{{team="{team}",round="{r["round"]}",run="{run_id}"}} '
                 f'{r["composite_score"]}'
+            )
+            lines.append(
+                f'nautilus_competition_paper_trades_closed{{team="{team}",round="{r["round"]}",run="{run_id}"}} '
+                f'{r["closed_trades"]}'
             )
     body = "\n".join(lines) + "\n"
     resp = requests.post(f"{url}/metrics/job/competition_3", data=body, timeout=15)

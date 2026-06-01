@@ -21,6 +21,8 @@ For each attempt `<iter>`:
    - If `pass: true` → COPY this iteration's `strategy.py` to `attempts/<round_iter>/strategy.py` where `<round_iter>` matches the harness iteration index, then EXIT the loop.
    - Else → loop to step 1 with the diagnostics in context for the researcher.
 
+When exiting the loop (pass OR forfeit), write the number of attempts taken to `attempts/<round_iter>/inner_iterations.txt`.
+
 If 5 attempts pass without a passing strategy:
 - Write a "hold cash, no orders" strategy.py to `attempts/<round_iter>/strategy.py`.
 - Exit with a note that no passing strategy was found this round.
