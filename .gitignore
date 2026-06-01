@@ -60,6 +60,10 @@ __pycache__/
 **/teams/*/reflections.md
 **/teams/*/leaderboard_observations.md
 
+# competition_3: per-team session runtime dirs (created by the Claude session)
+**/teams/team_*/.claude/hooks/
+**/teams/team_*/autoresearch/
+
 
 # APM dependencies (workspace-shared)
 apm_modules/
