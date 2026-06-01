@@ -14,7 +14,7 @@ per round, summed across 5 rounds.
 ## Multi-asset universe
 
 The catalog at `data/catalog/` contains 5-MIN bars for 10 USDT spot pairs:
-BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, LINK, MATIC (all suffixed
+BTC, ETH, SOL, BNB, XRP, ADA, DOGE, AVAX, LINK, POL (all suffixed
 `.BINANCE`). Trade any subset.
 
 The harness `config.yaml` declares `BTCUSDT.BINANCE` as the engine-bootstrap
