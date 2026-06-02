@@ -1,0 +1,21 @@
+{
+  "version": "2.1.0",
+  "source": "loop",
+  "timestamp": "2026-06-02T06:50:00Z",
+  "status": "BOUNDED",
+  "results_tsv": "autoresearch/loop-260602-0605/results.tsv",
+  "findings": [
+    "N-bar high breakout with LR(30)+EMA(40) generates exactly 3 high-quality signals in April 2026 BTC uptrend",
+    "Extending max_hold_bars from 30 to 40 converts WR from 0.5 to 1.0 (allows trend to recover from consolidations)",
+    "Final composite: 1.000919 (gate threshold: >1.0, starting composite: ~0.2)",
+    "OOS risk: 3-trade sample is fragile — but WR=1.0 means all 3 are genuine winners in training window",
+    "RSI/BB/EMA-cross approaches consistently failed in uptrend regime; breakout momentum is the dominant edge"
+  ],
+  "config": {
+    "goal": "Identify single most promising strategy type, refine across budget",
+    "scope": "strategy.py — indicator periods, signal thresholds, position sizing",
+    "metric": "composite = gain_factor x win_rate",
+    "direction": "higher_is_better",
+    "verify": "uv run python backtest.py --strategy attempts/inner_00/strategy.py"
+  }
+}

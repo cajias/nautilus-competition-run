@@ -1,0 +1,21 @@
+{
+  "version": "2.1.0",
+  "source": "loop",
+  "timestamp": "2026-06-02T11:20:00Z",
+  "status": "BOUNDED",
+  "results_tsv": "autoresearch/loop-260602-1058/results.tsv",
+  "findings": [
+    "MACD(12,26,9) histogram cross above zero + EMA(100) trend filter is the optimal round-3 config",
+    "composite=0.7121 (gain=1.017, WR=0.70) — best verified on round-3 train window",
+    "EMA(100) beats EMA(200): WR improves from 0.65 to 0.70; EMA(50) fails",
+    "TP/SL backstops (4%/2%) never fire — time-stop at 96 bars is the actual exit",
+    "Cooldown=48 bars is essential; shorter cooldown degrades both gain and WR"
+  ],
+  "config": {
+    "goal": "Maximize composite = gain_factor x win_rate on round-3 train window",
+    "scope": "strategy.py — MACD momentum, MACD params, EMA period, cooldown",
+    "metric": "composite = gain_factor x win_rate",
+    "direction": "higher_is_better",
+    "verify": "uv run python backtest.py --strategy attempts/<iter>/strategy.py"
+  }
+}

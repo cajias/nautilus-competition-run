@@ -1,11 +1,12 @@
-# Research Brief — team_depth_first, Round 2, Iteration 0
+# Research Brief — team_depth_first, Round 3, Iteration 0
 
 ## Question Investigated
 
-The current baseline strategy (attempts/000/strategy.py: RSI<30 LIMIT dip-buy, TP=2.5%, SL=2.4%)
-gets gain=1.001247 but win_rate=0.40 on the round-2 train window — WIN RATE is the binding
-constraint. What is the smallest, most targeted set of changes that raises WR to >= 0.50 while
-keeping gain > 1.0, with maximum composite margin?
+Round-3 train window (slow grind upward, Apr 22 - May 13, 2026): The RSI mean-reversion
+strategy that won Round 2 fails on Round 3 (gain=0.999, WR=0.5, FAIL). What MACD momentum
+configuration maximizes composite = gain_factor × win_rate on the round-3 window?
+Specifically: given MACD(12,26)>0 + EMA trend filter is the proven thesis, which EMA period
+and which MACD fast/slow parameters produce the highest composite above the gate?
 
 ## Autoresearch Invocation Run
 
@@ -14,11 +15,11 @@ keeping gain > 1.0, with maximum composite margin?
 Goal: Identify the single most promising strategy type from the diagnostics,
       then refine it across as many iterations as the budget allows.
       Prefer deep refinement of one approach over exploring new approaches.
-      [CONTEXT: Round 2 train Apr 15-May 6 2026, BTC +8.5% B&H; WR binding constraint]
-Scope: strategy.py — refine RSI threshold, EMA period, TP%, SL%, cooldown
-       for RSI dip-buy + EMA trend filter approach on BTCUSDT.BINANCE only.
+Scope: strategy.py — refine indicator periods, signal thresholds, and position
+       sizing for the approach chosen on iteration 1. Do NOT switch strategy type
+       mid-run unless the backtester confirms zero chance of passing.
 Metric: composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5;
-        secondary: maximize composite margin above gate
+        secondary: maximize composite margin above gate (not just barely pass)
 Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
 Iterations: 5
 --evals --evals-interval 2
@@ -26,69 +27,64 @@ Iterations: 5
 
 ## Top 3 Findings
 
-### Finding 1: RSI Recovery Exit (rsi_exit) is the WR breakthrough
-**Claim**: Replacing fixed TP/SL exits with "exit when RSI recovers from oversold to RSI>=55"
-raises WR from 0.40 to 0.50, then enables further refinement. This is the single most important
-change — the RSI recovery exit is the primary signal, TP/SL are just backstops.
-**Evidence**: iter_012 (RSI<30 market entry, rsi_exit=55, SL=3%, TP=5%) → gain=1.002128,
-WR=0.50, PASS. All previous fixed-TP/SL variants stuck at WR=0.35-0.45 regardless of TP/SL size.
-**Confidence**: HIGH — reproduced consistently across 10+ parameter variants.
+### Finding 1: MACD(12,26,9) histogram cross above zero + EMA(100) is the winning config
+**Claim**: MACD histogram crosses from ≤0 to >0, with price above EMA(100), MARKET entry,
+TP=4%/SL=2% backstops, cooldown=48 bars, produces gain=1.017303, WR=0.70, 40 trades (PASS).
+Composite = 1.017303 × 0.70 = **0.7121** — the best verified result.
+**Evidence**: Directly verified with `uv run python backtest.py --strategy attempts/r3_macd_iter3/strategy.py`
+→ `{"gain": 1.017303, "win_rate": 0.7, "num_trades": 40, "pass": true}`
+**Confidence**: HIGH — live backtest on round-3 train window.
 
-### Finding 2: EMA(80) trend filter produces a phase transition in WR (0.45 → 0.684)
-**Claim**: Adding EMA(80) = 400-minute = 6.67-hour trend filter (enter only when price > EMA80)
-raises WR from 0.60 to 0.684. There is a sharp phase transition: EMA=79 gives WR=0.45 (FAIL),
-EMA=80 gives WR=0.684. EMA=90+ gives WR=0.63 (still good but lower than EMA=80).
-**Evidence**: Sweep of EMA 70-200 with RSI recovery exit (rsi_exit=55, SL=4%, TP=8%):
-- EMA=70: WR=0.45 (FAIL)
-- EMA=79: WR=0.45 (FAIL)
-- EMA=80: WR=0.684, gain=1.004285 (BEST — composite=0.6869)
-- EMA=90: WR=0.631, gain=1.003703
-**Confidence**: HIGH — confirmed in multiple sweep runs.
+### Finding 2: EMA(100) beats EMA(200) significantly; EMA(50) fails
+**Claim**: EMA period is the critical lever for round-3's slow-grind structure.
+EMA(100) = 500 minutes = 8.3 hours captures the dominant intraday trend without being
+either too lagging (EMA200) or too reactive (EMA50).
+**Evidence** (all verified on round-3 window):
+- EMA=50: gain=0.976, WR=0.50 → FAIL
+- EMA=100: gain=1.017, WR=0.70 → PASS, composite=**0.7121** (BEST)
+- EMA=150: gain=1.029, WR=0.65 → PASS, composite=0.6688
+- EMA=200: gain=1.029, WR=0.65 → PASS, composite=0.6691
+**Confidence**: HIGH — full EMA sweep, reproducible.
 
-### Finding 3: RSI threshold, rsi_exit level, and SL/TP values are effectively invariant
-**Claim**: Once the RSI recovery exit is the primary driver and EMA(80) filters entries,
-tweaking RSI threshold (25-35), rsi_exit level (45-80), or SL/TP (3.5%-10%) makes no
-material difference. The strategy always reaches exactly 19-20 closed trades and WR=0.684.
-**Evidence**: 20+ parameter sweep variants returning identical results. The RSI recovery to
-any level >= 45 fires before any SL/TP backstop triggers in this window.
-**Confidence**: HIGH — exhaustive parameter sweep with invariant results confirmed.
+### Finding 3: MACD(12,26,9) is optimal; faster periods and shorter cooldown degrade metrics
+**Claim**: MACD(8,21,9) with EMA(100) fails (gain=0.999, WR=0.50). Cooldown=24 bars
+(vs 48) also fails (gain=0.988, WR=0.55). The standard MACD(12,26,9) with 48-bar cooldown
+is the optimal parameterization for this window. TP/SL backstops (4%/2%) effectively never
+fire — the 96-bar time-stop is the actual exit mechanism (plus TP hit on strong moves).
+**Evidence**: r3_macd_iter4b (MACD 8,21,9): `{"gain": 0.999435, "win_rate": 0.5, "pass": false}`;
+r3_macd_iter5b (cooldown=24): `{"gain": 0.987532, "win_rate": 0.55, "pass": false}`
+**Confidence**: HIGH — both verified on round-3 window.
 
 ## Strategy Direction for Strategist
 
-**Use `attempts/iter_013/strategy.py` as the final strategy** — it is confirmed passing with
-composite=0.6869, well above the gate floor.
-
-The winning strategy for round 2 (train: Apr 15 - May 6, BTC +8.5% uptrend) is:
-- **Entry**: RSI(14) < 30 AND price > EMA(80) → market BUY
-- **Primary exit**: RSI(14) >= 55 (momentum recovered to neutral)
-- **Backstop exits**: SL=4%, TP=8%, time-stop=288 bars (24h)
-- **Cooldown**: 3 bars between entries
-
-Key params confirmed: rsi_period=14, rsi_oversold=30.0, ema_period=80, rsi_exit=55.0,
-take_profit_pct=0.08, stop_loss_pct=0.04, max_hold_bars=288, cooldown_bars=3.
-
-The EMA(80) = 400-minute filter captures the medium-term uptrend structure of the Apr-May
-2026 BTC window, filtering out dip entries during deeper corrections. The RSI recovery exit
-closes positions when selling pressure genuinely exhausts rather than at arbitrary TP levels.
-
-**Verified train result**: gain=1.004285, win_rate=0.684211, num_trades=38 (19 closed positions), pass=true
-**Composite**: 1.004285 × 0.684 = **0.6869** (37% above the WR=0.5 floor)
+Use `attempts/r3_macd_iter3/strategy.py` as the production strategy for round 3. The winning
+config is: **MACD(12,26,9) histogram cross above zero (prev_hist ≤ 0, curr_hist > 0) with
+price above EMA(100), MARKET entry, TP=4.0%, SL=2.0% (backstops — rarely fire), 96-bar
+time-stop, 48-bar cooldown, 90% position fraction.** This delivers gain=1.017, WR=0.70,
+40 trades, composite=0.7121 — the strongest verified result in the round-3 slow-grind regime.
+Do NOT use RSI mean-reversion (fails at gain=0.999). Do NOT tighten EMA below 100 (EMA=50
+fails). Do NOT shorten cooldown below 48 bars. The EMA(100) filter is the key differentiator:
+it improves WR from 0.65 to 0.70 versus EMA(200) by better fitting the intraday 8.3-hour
+trend structure of the round-3 window. Note: prior rounds had OOS scoring 0 with MACD momentum;
+strategist should be aware of potential overfit but the train gate is confirmed passing with
+healthy margin (composite 42% above the WR=0.5 floor).
 
 ## Best Strategy File
 
-`/Users/rc/Projects/workspace/nautilus-competition-run/competition_3/teams/team_depth_first/attempts/iter_013/strategy.py`
+`/Users/rc/Projects/workspace/nautilus-competition-run/competition_3/teams/team_depth_first/attempts/r3_macd_iter3/strategy.py`
 
-Verified: `{"gain": 1.004285, "win_rate": 0.684211, "num_trades": 38, "pass": true}`
+Verified: `{"gain": 1.017303, "win_rate": 0.7, "num_trades": 40, "pass": true}`
+Composite: 1.017303 × 0.70 = **0.7121**
 
 ## Iteration Log
 
 | iter | config | gain | WR | trades | pass | composite |
 |---|---|---|---|---|---|---|
-| baseline 000 | RSI<30 LIMIT, TP 2.5%, SL 2.4% | 1.001247 | 0.40 | 40 | FAIL | 0 |
-| iter_001 | RSI<22+EMA200, TP 3%, SL 2.4% | 0.996243 | 0.45 | 40 | FAIL | 0 |
-| iter_002 | RSI<20 market, TP 3.5%, SL 2.5% | 0.998133 | 0.40 | 40 | FAIL | 0 |
-| iter_006 | RSI crossover exit | 1.0 | 0.0 | 0 | FAIL | 0 |
-| iter_012 | RSI<30 market, rsi_exit=55, SL=3% | 1.002128 | 0.50 | 40 | PASS | 0.501 |
-| sweep SL=3.5% | RSI<30, rsi_exit=55, SL=3.5% | 1.003369 | 0.60 | 40 | PASS | 0.602 |
-| sweep EMA=80 | RSI<30+EMA80, rsi_exit=55, SL=4% | 1.004285 | 0.684 | 38 | PASS | **0.6869** |
-| iter_013 | Final best (EMA=80 + RSI recovery) | 1.004285 | 0.684 | 38 | PASS | **0.6869** |
+| baseline | RSI dip-buy (Round 2) on Round 3 window | 0.999 | 0.50 | 39 | FAIL | 0 |
+| r3_iter1 | MACD(12,26,9)+EMA(200) TP=4% SL=2% | 1.029 | 0.65 | 40 | PASS | 0.6691 |
+| r3_iter2 | MACD(12,26,9)+EMA(200) TP=5% SL=2.5% | 1.029 | 0.65 | 40 | PASS | 0.6691 (no change) |
+| r3_iter3 | MACD(12,26,9)+EMA(100) TP=4% SL=2% | 1.017 | 0.70 | 40 | PASS | **0.7121** ← BEST |
+| r3_iter4 | MACD(12,26,9)+EMA(50) TP=4% SL=2% | 0.976 | 0.50 | 40 | FAIL | 0 |
+| r3_iter5 | MACD(12,26,9)+EMA(150) TP=4% SL=2% | 1.029 | 0.65 | 40 | PASS | 0.6688 |
+| r3_iter4b | MACD(8,21,9)+EMA(100) TP=4% SL=2% | 0.999 | 0.50 | 40 | FAIL | 0 |
+| r3_iter5b | MACD(12,26,9)+EMA(100) cooldown=24 | 0.988 | 0.55 | 40 | FAIL | 0 |

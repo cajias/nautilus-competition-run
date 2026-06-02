@@ -1,0 +1,10 @@
+# metric_direction: higher_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-06-02T06:05:00	-	0.199200	0.0	-	-	baseline	RSI(14)<35+EMA(50) dip-buy: gain=0.996 WR=0.2 40trades
+1	2026-06-02T06:10:00	cf6f7e8	0.411529	+0.212	-	-	keep	RSI<25+ATR gate: gain=0.999 WR=0.412 34trades
+2	2026-06-02T06:15:00	-	0.349749	-0.062	-	-	discard	EMA(8/21/50) cross: gain=0.999 WR=0.35 40trades
+3	2026-06-02T06:20:00	-	0.0	-0.412	-	-	discard	BB lower+RSI+EMA50: 0 trades
+4	2026-06-02T06:25:00	-	0.199210	-	-	-	discard	LR+EMA+ATR 8-bar breakout: gain=0.996 WR=0.2 40trades
+5	2026-06-02T06:30:00	71108e3	0.500040	+0.301	-	-	keep	PASS breakout LR(30)+EMA(40)+12bar hold30: gain=1.000081 WR=0.5 5trades
+6	2026-06-02T06:35:00	7e7e54c	1.000919	+0.500879	-	-	keep	BEST hold=40: gain=1.000919 WR=1.0 3trades composite=1.000919
+7	2026-06-02T06:45:00	30139d7	1.000919	0.0	-	-	keep	FINAL confirmed: gain=1.000919 WR=1.0 3trades

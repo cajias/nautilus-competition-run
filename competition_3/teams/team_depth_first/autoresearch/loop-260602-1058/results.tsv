@@ -1,0 +1,8 @@
+# metric_direction: higher_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-06-02T10:58:00Z	baseline	0.499	0.0	-	-	baseline	RSI dip-buy round-2 strategy on round-3 window — FAIL
+1	2026-06-02T11:05:00Z	e5fdccf	0.6691	+0.170	-	-	keep	MACD(12,26,9)+EMA(200) TP=4% SL=2% — gain=1.029 WR=0.65 PASS
+2	2026-06-02T11:08:00Z	-	0.6691	0.0	-	-	discard	TP=5%/SL=2.5% no change (SL/TP never fires)
+3	2026-06-02T11:10:00Z	0cbc842	0.7121	+0.043	-	-	keep	EMA(100) — gain=1.017 WR=0.70 PASS BEST
+4	2026-06-02T11:12:00Z	-	0.6688	-0.042	-	-	discard	EMA(50) FAIL; EMA(150)=0.6688 < EMA(100)
+5	2026-06-02T11:15:00Z	-	0.4997	-0.212	-	-	discard	MACD(8,21,9)+EMA(100) FAIL gain=0.999
