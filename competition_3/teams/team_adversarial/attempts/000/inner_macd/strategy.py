@@ -26,8 +26,8 @@ from competition_3.shared.team_strategy_base import TeamStrategyBase
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
-EMA_PERIOD = 200
-TP_PCT = 0.040       # 4.0% TP
+EMA_PERIOD = 100
+TP_PCT = 0.050       # 5.0% TP — wider target to boost average win size
 SL_PCT = 0.015       # 1.5% SL — tighter stop to shrink loss drag
 TIME_STOP_BARS = 288  # ~24h — widened to let winners reach 4% TP
 COOLDOWN_BARS = 48   # 4h between entries
