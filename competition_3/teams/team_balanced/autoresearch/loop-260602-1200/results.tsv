@@ -1,0 +1,8 @@
+# metric_direction: higher_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-06-02T12:00:00Z	bafea63	0.5524	0.0	-	-	baseline	RSI<30 entry, RSI>55 exit, TP=2.5%, SL=2.0%, TIME_STOP=144, no EMA filter — gain=1.0043/WR=0.55
+1	2026-06-02T12:05:00Z	7027c81	0.5676	+0.0152	-	-	keep	MACD(12,26) hist cross>0 + EMA(100), TP=4%/SL=1.5%/TIME_STOP=288/COOL=48 — gain=1.00911/WR=0.5625
+2	2026-06-02T12:10:00Z	725bb2c	0.6167	+0.0491	-	-	keep	EMA 100->200 stronger trend filter — gain=1.0023/WR=0.6154/composite=0.6167 BEST
+3	2026-06-02T12:15:00Z	725bb2c	0.6167	0.0	-	-	no-op	COOLDOWN sweeps (24,72) + TIME_STOP sweeps (144,576) + SL sweeps (1.0%,2.0%) all inferior
+4	2026-06-02T12:20:00Z	725bb2c	0.6167	0.0	-	-	no-op	MACD(6,13) faster periods — WR=0.54 gain=0.997 FAIL; RSI+EMA200 — WR=0.55 gain=1.0008 composite=0.5504 inferior
+5	2026-06-02T12:25:00Z	725bb2c	0.6167	0.0	-	-	no-op	Final verification: MACD(12,26)+EMA(200) TP=4%/SL=1.5%/TIME_STOP=288/COOL=48 CONFIRMED BEST
