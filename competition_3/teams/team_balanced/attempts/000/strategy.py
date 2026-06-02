@@ -28,7 +28,7 @@ from competition_3.shared.team_strategy_base import TeamStrategyBase
 # --- hardcoded strategy parameters ---
 RSI_PERIOD = 14
 RSI_ENTRY = 30.0           # deep-oversold long entry (RSI < this)
-RSI_EXIT = 55.0            # RSI-based exit: close position when RSI recovers to this
+RSI_EXIT = 45.0            # iter9: exit earlier at RSI=45 for quicker bounce capture
 EMA_TREND_PERIOD = 0       # iter8: disable EMA filter — let RSI signals fire freely
 TP_PCT = 0.030             # fallback bracket TP (if RSI exit doesn't fire)
 SL_PCT = 0.025             # fallback bracket SL
