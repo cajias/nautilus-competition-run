@@ -1,0 +1,49 @@
+{
+  "version": "2.1.0",
+  "source": "loop",
+  "timestamp": "2026-06-02T10:28Z",
+  "status": "BOUNDED",
+  "results_tsv": "autoresearch/autoresearch-260602-1006/results.tsv",
+  "findings": [
+    {
+      "rank": 1,
+      "strategy": "MACD(12,26)>0 + EMA(200) + TP=4%/SL=2%",
+      "file": "attempts/scratch_r3/candidate_05_macd.py",
+      "gain": 1.029472,
+      "win_rate": 0.65,
+      "num_trades": 40,
+      "pass": true,
+      "composite": 0.669,
+      "notes": "Best result. MACD line crosses above zero in an uptrending market. EMA(200) as trend filter. 4% TP allows full momentum capture. 48-bar cooldown keeps signal quality high."
+    },
+    {
+      "rank": 2,
+      "strategy": "MACD(12,26)>0 + EMA(200) + TP=2.5%/SL=2%",
+      "file": "attempts/scratch_r3/candidate_05b_macd_tight.py",
+      "gain": 1.011183,
+      "win_rate": 0.50,
+      "num_trades": 40,
+      "pass": true,
+      "composite": 0.506,
+      "notes": "PASS but lower WR=0.50 (knife edge). Tighter TP reduces win quality."
+    },
+    {
+      "rank": 3,
+      "strategy": "RSI<0.25 + EMA100 (baseline inner_01 on round3)",
+      "file": "attempts/inner_01/strategy.py",
+      "gain": 0.954173,
+      "win_rate": 0.363636,
+      "num_trades": 22,
+      "pass": false,
+      "composite": 0.0,
+      "notes": "FAIL. Mean-reversion longs in an uptrend with slow recovery. SL hit more than TP."
+    }
+  ],
+  "config": {
+    "goal": "Explore a wide range of strategy types (momentum, mean-reversion, breakout, multi-asset) and accept the first strategy that clears the pass gate.",
+    "scope": "strategy.py — any signal type, any of the 10 catalog symbols, any indicator period, any position-sizing scheme",
+    "metric": "composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5",
+    "verify": "uv run python backtest.py --strategy attempts/<iter>/strategy.py",
+    "iterations": 5
+  }
+}

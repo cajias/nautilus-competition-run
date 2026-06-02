@@ -1,0 +1,10 @@
+# metric_direction: higher_is_better
+iteration	timestamp	commit	metric	delta	guard	guard-metric	status	description
+0	2026-06-02T10:06Z	ef7e8a5	-0.046	0.0	n/a	n/a	baseline	RSI14<0.25+EMA100 inner_01 on round3: gain=0.954 WR=0.364 22trades FAIL
+1	2026-06-02T10:10Z	-	-0.053	-0.007	n/a	n/a	discard	EMA20xEMA50 crossover: gain=0.947 WR=0.25 40trades FAIL
+2	2026-06-02T10:12Z	-	-0.053	0.0	n/a	n/a	discard	30-bar high breakout+EMA50 rising: gain=0.947 WR=0.25 40trades FAIL
+3	2026-06-02T10:14Z	-	-0.047	+0.006	n/a	n/a	discard	60-bar breakout+EMA200: gain=0.953 WR=0.40 40trades FAIL
+4	2026-06-02T10:16Z	-	-0.026	+0.021	n/a	n/a	discard	RSI14 cross 0.55 momentum+EMA50: gain=0.974 WR=0.40 40trades FAIL
+5	2026-06-02T10:22Z	0940840	+0.029	+0.055	n/a	n/a	keep	MACD(12,26)>0+EMA(200) TP=4%/SL=2%: gain=1.029 WR=0.65 40trades PASS
+5b	2026-06-02T10:24Z	-	+0.011	-0.018	n/a	n/a	discard	MACD(12,26)>0+EMA(200) TP=2.5%: gain=1.011 WR=0.50 40trades PASS but lower margin
+6	2026-06-02T10:26Z	-	-0.001	-0.030	n/a	n/a	discard	MACD(8,21)>0+EMA(100): gain=0.999 WR=0.50 40trades FAIL margin
