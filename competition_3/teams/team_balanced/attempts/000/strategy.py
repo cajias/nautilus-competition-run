@@ -1,24 +1,18 @@
-"""team_balanced — Round 0 strategy: BTC oversold-bounce, long-only, BTC-only.
+"""team_balanced — Round 3 strategy: BTC oversold-bounce with RSI-exit, long-only, BTC-only.
 
-Why this design (see _inbox/research_brief.md + EDA + engine calibration):
-  * The backtest engine loads bars ONLY for the anchor instrument (BTCUSDT) —
-    `build_backtest_engine` does `catalog.bars(bar_types=[config.instrument.bar_type])`.
-    So every backtest gate is BTC-only; multi-asset is live-paper only.
-  * BTC fees are 0.1% maker + 0.1% taker = 0.2% round-trip. The prior round's
-    ATR-tight (~0.12%) targets were SMALLER than the fee → fee-dominated loss.
-    Fix: WIDE targets so the 0.2% fee is a small fraction of the move.
-  * Entry on deep oversold (RSI(14) < threshold) in an uptrend (EMA filter),
-    via a resting LIMIT at the dip price so we capture the cheap fill the
-    mean-reversion edge depends on (a market order fills next-bar-open, after
-    the bounce has started — calibrated to drop win-rate ~20 points).
-  * Exit via a resting BRACKET (TP limit + SL stop) so intrabar first-touch
-    fills, plus a bar-count time-stop for zombie positions.
+Round-3 window: 2026-04-22→05-13 (+5.49% uptrend, drops Apr22-29 then rallies May1-12).
 
-Gate: gain_train > 1.0 AND win_rate_train >= 0.5 on the 2026-04-01→04-22 window.
+Key improvements over Round-2:
+  * MARKET entry (not LIMIT) — in this window, LIMIT at -0.2% causes adverse selection;
+    those that fill are the ones that drop further. WR=0.30 with LIMIT → 0.50+ with MARKET.
+  * RSI-based exit (close when RSI recovers to RSI_EXIT threshold) instead of fixed TP/SL.
+    Round-2 best: RSI<30 entry + RSI>55 exit gave gain=1.004, WR=0.684.
+  * EMA80 trend filter: only enter when close > EMA(80) (uptrend confirmation).
+  * Fallback TP/SL bracket still placed but RSI exit fires first in recovery.
 
-NO @dataclass on the msgspec StrategyConfig (stacking it crashes import with
-"AttributeError: readonly attribute"). All params are hardcoded module constants
-because the harness constructs TeamStrategyConfig with ONLY instrument_id+bar_type.
+Gate: gain_train > 1.0 AND win_rate_train >= 0.5 on the 2026-04-22→05-13 window.
+
+NO @dataclass on the msgspec StrategyConfig.
 """
 from __future__ import annotations
 
@@ -31,18 +25,16 @@ from nautilus_trader.trading.strategy import StrategyConfig
 
 from competition_3.shared.team_strategy_base import TeamStrategyBase
 
-# --- hardcoded strategy parameters (config carries only instrument_id+bar_type) ---
+# --- hardcoded strategy parameters ---
 RSI_PERIOD = 14
-RSI_ENTRY = 25.0           # iter3: tighter threshold; EDA shows WR=0.65 vs 0.564 for RSI<30
-EMA_TREND_PERIOD = 0       # buy dips only when close > EMA(this); 0 disables the filter
-TP_PCT = 0.025             # take-profit fraction (TP>SL: positive R:R, satisfies risk rule)
-SL_PCT = 0.024             # stop-loss fraction (rarely triggers; losers exit via time-stop)
-TIME_STOP_BARS = 144       # ~12h on 5-min bars: zombie-position backstop
-# Round-3 fix: LIMIT entry at 0.2% below was causing adverse selection in the
-# mild uptrend (Apr22-May13). Orders not filling → those that DO fill are deep dips
-# that keep falling → WR=0.30. Switch to MARKET entry to get all signals filled.
-ENTRY_LIMIT_OFFSET = None  # None = MARKET entry (fills at next bar open)
-ENTRY_TTL_BARS = 3         # cancel an unfilled limit entry after this many bars
+RSI_ENTRY = 30.0           # deep-oversold long entry (RSI < this)
+RSI_EXIT = 55.0            # RSI-based exit: close position when RSI recovers to this
+EMA_TREND_PERIOD = 80      # enter only when close > EMA(80) — uptrend filter
+TP_PCT = 0.030             # fallback bracket TP (if RSI exit doesn't fire)
+SL_PCT = 0.025             # fallback bracket SL
+TIME_STOP_BARS = 144       # ~12h zombie-position backstop
+ENTRY_LIMIT_OFFSET = None  # None = MARKET entry (no adverse selection in uptrend)
+ENTRY_TTL_BARS = 3
 TRADE_NOTIONAL_USDT = 500.0
 
 
@@ -52,7 +44,7 @@ class TeamStrategyConfig(StrategyConfig, frozen=True):
 
 
 class TeamStrategy(TeamStrategyBase):
-    """Long-only oversold-bounce on the anchor instrument (BTCUSDT)."""
+    """Long-only oversold-bounce with RSI-based exit on BTC (anchor instrument)."""
 
     def on_start_subscribe(self) -> None:
         self.instrument = self.cache.instrument(self.config.instrument_id)
@@ -63,13 +55,14 @@ class TeamStrategy(TeamStrategyBase):
             self.ema = ExponentialMovingAverage(EMA_TREND_PERIOD)
             self.register_indicator_for_bars(self.config.bar_type, self.ema)
         self._bars_seen = 0
-        self._entry_bar = None       # bar index when the current position opened
-        self._pending_entry_bar = None  # bar index when a limit entry was placed
+        self._entry_bar = None
+        self._pending_entry_bar = None
+        self._position_open = False
         self.subscribe_bars(self.config.bar_type)
         self.log.info(
-            f"team_balanced R0: RSI({RSI_PERIOD})<{RSI_ENTRY} oversold-bounce, "
+            f"team_balanced R3: RSI({RSI_PERIOD})<{RSI_ENTRY} entry, RSI>{RSI_EXIT} exit, "
             f"EMA{EMA_TREND_PERIOD} trend filter, TP=+{TP_PCT:.1%}/SL=-{SL_PCT:.1%}, "
-            f"limit_entry={ENTRY_LIMIT_OFFSET}, time-stop={TIME_STOP_BARS} bars"
+            f"MARKET entry"
         )
 
     def _ready(self) -> bool:
@@ -86,19 +79,29 @@ class TeamStrategy(TeamStrategyBase):
 
         flat = self.portfolio.is_flat(self.config.instrument_id)
 
-        # Time-stop: close a zombie position that neither TP nor SL has resolved.
-        if not flat and self._entry_bar is not None:
-            if self._bars_seen - self._entry_bar >= TIME_STOP_BARS:
+        # RSI-based exit: close when RSI recovers (overrides bracket exit)
+        if not flat and self._position_open:
+            if self.rsi.value >= RSI_EXIT:
                 self.cancel_all_orders(self.config.instrument_id)
-                self.close_position(
-                    self.cache.positions_open(instrument_id=self.config.instrument_id)[0]
-                )
+                positions = self.cache.positions_open(instrument_id=self.config.instrument_id)
+                if positions:
+                    self.close_position(positions[0])
+                return
+
+            # Time-stop: zombie position backstop
+            if self._entry_bar is not None:
+                if self._bars_seen - self._entry_bar >= TIME_STOP_BARS:
+                    self.cancel_all_orders(self.config.instrument_id)
+                    positions = self.cache.positions_open(instrument_id=self.config.instrument_id)
+                    if positions:
+                        self.close_position(positions[0])
+                return
             return
 
         inflight = self.cache.orders_inflight(instrument_id=self.config.instrument_id)
         open_orders = self.cache.orders_open(instrument_id=self.config.instrument_id)
 
-        # Expire a stale, unfilled limit entry so a fresh signal can re-arm.
+        # Expire stale limit entry
         if flat and open_orders and self._pending_entry_bar is not None:
             if self._bars_seen - self._pending_entry_bar >= ENTRY_TTL_BARS:
                 self.cancel_all_orders(self.config.instrument_id)
@@ -107,14 +110,14 @@ class TeamStrategy(TeamStrategyBase):
         if not flat or inflight or open_orders:
             return
 
-        # Entry: deep oversold, in uptrend (if filter enabled).
+        # Entry: deep oversold + uptrend filter
         if self.rsi.value >= RSI_ENTRY:
             return
         if self.ema is not None and float(bar.close) <= self.ema.value:
             return
-        self._submit_bracket(bar)
+        self._submit_entry(bar)
 
-    def _submit_bracket(self, bar: Bar) -> None:
+    def _submit_entry(self, bar: Bar) -> None:
         px = float(bar.close)
         prec = self.instrument.price_precision
         if ENTRY_LIMIT_OFFSET is None:
@@ -127,6 +130,9 @@ class TeamStrategy(TeamStrategyBase):
         qty = Quantity.from_str(f"{qty_f:.{self.instrument.size_precision}f}")
         if qty.as_double() <= 0:
             return
+
+        # Place a simple market order (RSI exit will handle the close)
+        # Use bracket with wide TP/SL as safety net only
         tp = Price.from_str(f"{entry_px * (1 + TP_PCT):.{prec}f}")
         sl = Price.from_str(f"{entry_px * (1 - SL_PCT):.{prec}f}")
         kwargs = dict(
@@ -147,8 +153,10 @@ class TeamStrategy(TeamStrategyBase):
     def on_position_opened(self, event) -> None:
         self._entry_bar = self._bars_seen
         self._pending_entry_bar = None
+        self._position_open = True
 
     def on_position_closed(self, event) -> None:
-        super().on_position_closed(event)  # base counts closed trades / self-stops at 20
+        super().on_position_closed(event)
         self._entry_bar = None
         self._pending_entry_bar = None
+        self._position_open = False
