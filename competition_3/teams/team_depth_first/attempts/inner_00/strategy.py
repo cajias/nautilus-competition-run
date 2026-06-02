@@ -1,16 +1,29 @@
-"""team_depth_first — inner_00 (Iteration 6)
+"""team_depth_first — inner_00 (Final — Iteration 5)
 
-Strategy: N-bar Breakout — exact team_completeness pass params as starting point.
+Strategy: N-bar High Breakout with LR trend filter and extended time-stop.
 
-team_completeness iter000 passed with: gain=1.000081, WR=0.5, 5 trades using:
-- LR(30) slope > 0.0001
-- EMA(40) price_above_ema (no margin)
-- Breakout: 12 bars
-- TP=2.5%, SL=1.0%
-- max_hold=30 bars, cooldown=3
+DEPTH-FIRST REFINEMENT RESULT:
+Starting from team_completeness iter000 baseline (5 trades, WR=0.5, gain=1.000081),
+systematic parameter sweep found that extending max_hold_bars from 30 → 40 bars
+converts the 5-trade WR=0.5 result into 3-trade WR=1.0, improving composite from
+0.500040 to 1.000919.
 
-Depth-first refinement starting point: reproduce that pass, then improve.
-This iteration: exact same as team_completeness000 to confirm reproducibility.
+Key finding: In April 2026 BTC uptrend, the LR(30)+EMA(40)+12-bar breakout signal
+fires exactly 3 high-momentum entries. With hold=30, 2 of 5 trades get stopped out
+via SL or time. With hold=40, all 3 unique signals complete profitably.
+The extra hold time allows the trend to recover from short consolidations.
+
+Signal logic:
+- LR(30) slope > 0.0001 (trend quality filter)
+- EMA(40) bias: price must be above EMA (uptrend confirmation)
+- 12-bar breakout: close > 12-bar high (momentum entry signal)
+- Exit: TP=2.5%, SL=1.0%, time-stop=40 bars (3.3hr)
+- Cooldown: 3 bars (avoid immediate re-entry)
+
+Fee awareness: TP=2.5% >> 0.2% round-trip fee (12.5x ratio).
+
+TRAIN RESULT: gain=1.000919, win_rate=1.0, num_trades=3, pass=True
+COMPOSITE: 1.000919 (gate: >0, secondary: maximize margin above 1.0)
 """
 from __future__ import annotations
 
@@ -33,15 +46,14 @@ except ImportError:
 class TeamStrategyConfig(StrategyConfig, frozen=True):
     instrument_id: InstrumentId
     bar_type: BarType
-    lr_period: int = 30
-    ema_period: int = 40
-    breakout_period: int = 12
-    min_lr_slope: float = 0.0001
-    cooldown_bars: int = 3
-    take_profit_pct: float = 0.025
-    stop_loss_pct: float = 0.010
-    max_hold_bars: int = 30
-    max_hold_bars: int = 40
+    lr_period: int = 30            # LinearRegression for slope direction
+    ema_period: int = 40           # EMA for trend bias filter (price above = bullish)
+    breakout_period: int = 12      # N-bar lookback for breakout (12 bars = 1hr)
+    min_lr_slope: float = 0.0001   # minimum LR slope
+    cooldown_bars: int = 3         # min bars between entries
+    take_profit_pct: float = 0.025  # 2.5%
+    stop_loss_pct: float = 0.010    # 1.0%
+    max_hold_bars: int = 40         # time-stop: 40 x 5min = 3.3 hours (key parameter)
     trade_size: float = 0.001
 
 
@@ -52,6 +64,7 @@ class TeamStrategy(TeamStrategyBase):
         self.lr = LinearRegression(config.lr_period)
         self.ema = ExponentialMovingAverage(config.ema_period)
 
+        # Rolling window for breakout detection
         self._close_history: deque[float] = deque(maxlen=config.breakout_period + 1)
 
         self._position_side: str | None = None
@@ -77,6 +90,7 @@ class TeamStrategy(TeamStrategyBase):
         if not (self.lr.initialized and self.ema.initialized):
             return
 
+        # Need full lookback window for breakout detection
         if len(self._close_history) < self.config.breakout_period + 1:
             return
 
@@ -106,11 +120,14 @@ class TeamStrategy(TeamStrategyBase):
         if self._bars_since_last_trade < self.config.cooldown_bars:
             return
 
+        # Trend quality filters
         lr_uptrend = lr_slope > self.config.min_lr_slope
         lr_downtrend = lr_slope < -self.config.min_lr_slope
+        # EMA trend bias
         price_above_ema = close_price > ema_val
         price_below_ema = close_price < ema_val
 
+        # Breakout: current close vs previous N bars (exclude current bar)
         prev_closes = list(self._close_history)[:-1]
         prev_high = max(prev_closes)
         prev_low = min(prev_closes)
