@@ -41,6 +41,7 @@ class TeamStrategyConfig(StrategyConfig, frozen=True):
     take_profit_pct: float = 0.025
     stop_loss_pct: float = 0.010
     max_hold_bars: int = 30
+    max_hold_bars: int = 40
     trade_size: float = 0.001
 
 
