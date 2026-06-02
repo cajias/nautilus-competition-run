@@ -33,10 +33,10 @@ from competition_3.shared.team_strategy_base import TeamStrategyBase
 
 # --- hardcoded strategy parameters (config carries only instrument_id+bar_type) ---
 RSI_PERIOD = 14
-RSI_ENTRY = 30.0           # deep-oversold long entry
+RSI_ENTRY = 35.0           # iter2: raise to 35 to get more fills in mild uptrend
 EMA_TREND_PERIOD = 0       # buy dips only when close > EMA(this); 0 disables the filter
-TP_PCT = 0.025             # take-profit fraction (TP>SL: positive R:R, satisfies risk rule)
-SL_PCT = 0.024             # stop-loss fraction (rarely triggers; losers exit via time-stop)
+TP_PCT = 0.030             # iter2: widen TP to 3.0% so winners earn more vs fee drag
+SL_PCT = 0.024             # stop-loss fraction
 TIME_STOP_BARS = 144       # ~12h on 5-min bars: zombie-position backstop
 # Round-3 fix: LIMIT entry at 0.2% below was causing adverse selection in the
 # mild uptrend (Apr22-May13). Orders not filling → those that DO fill are deep dips
