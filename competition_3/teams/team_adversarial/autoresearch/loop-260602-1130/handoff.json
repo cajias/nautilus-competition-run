@@ -1,0 +1,19 @@
+{
+  "version": "2.1.0",
+  "source": "loop",
+  "timestamp": "2026-06-02T11:45",
+  "status": "BOUNDED",
+  "results_tsv": "autoresearch/loop-260602-1130/results.tsv",
+  "findings": [
+    "TIME_STOP widening (96→288 bars) crossed gain above 1.0 gate",
+    "Best config: MACD(12,26,9)+EMA(100) TP=4% SL=1.5% TIME_STOP=288 COOLDOWN=48 — gain=1.0157 WR=0.5625 31 trades composite=0.5713",
+    "Adversarial gate composite>1.2 not met — budget exhausted on minimum gate pass"
+  ],
+  "config": {
+    "goal": "Find strategy clearing gain>1.0 AND WR>=0.5, adversarial target composite>1.2",
+    "scope": "attempts/000/inner_macd/strategy.py",
+    "metric": "composite = gain_factor x win_rate",
+    "direction": "higher_is_better",
+    "verify": "uv run python backtest.py --strategy attempts/000/inner_macd/strategy.py"
+  }
+}
