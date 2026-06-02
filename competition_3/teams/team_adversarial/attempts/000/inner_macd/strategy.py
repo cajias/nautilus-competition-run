@@ -27,9 +27,9 @@ MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
 EMA_PERIOD = 100
-TP_PCT = 0.050       # 5.0% TP — wider target to boost average win size
+TP_PCT = 0.040       # 4.0% TP
 SL_PCT = 0.015       # 1.5% SL — tighter stop to shrink loss drag
-TIME_STOP_BARS = 288  # ~24h — widened to let winners reach 4% TP
+TIME_STOP_BARS = 9999  # effectively disabled — let TP/SL decide all exits
 COOLDOWN_BARS = 48   # 4h between entries
 POSITION_FRACTION = 0.90
 
