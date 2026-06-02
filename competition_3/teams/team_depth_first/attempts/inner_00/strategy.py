@@ -101,13 +101,8 @@ class TeamStrategy(TeamStrategyBase):
         if self._position_side is not None:
             self._bars_in_trade += 1
 
-            if self._position_side == "long":
-                hit_tp = close_price >= self._tp_price
-                hit_sl = close_price <= self._sl_price
-            else:
-                hit_tp = close_price <= self._tp_price
-                hit_sl = close_price >= self._sl_price
-
+            hit_tp = close_price >= self._tp_price
+            hit_sl = close_price <= self._sl_price
             hit_time = self._bars_in_trade >= self.config.max_hold_bars
 
             if hit_tp or hit_sl or hit_time:
@@ -122,24 +117,17 @@ class TeamStrategy(TeamStrategyBase):
 
         # Trend quality filters
         lr_uptrend = lr_slope > self.config.min_lr_slope
-        lr_downtrend = lr_slope < -self.config.min_lr_slope
         # EMA trend bias
         price_above_ema = close_price > ema_val
-        price_below_ema = close_price < ema_val
 
         # Breakout: current close vs previous N bars (exclude current bar)
         prev_closes = list(self._close_history)[:-1]
         prev_high = max(prev_closes)
-        prev_low = min(prev_closes)
 
         long_signal = close_price > prev_high and lr_uptrend and price_above_ema
-        short_signal = close_price < prev_low and lr_downtrend and price_below_ema
 
         if long_signal:
             self._enter_long(close_price)
-            self._bars_since_last_trade = 0
-        elif short_signal:
-            self._enter_short(close_price)
             self._bars_since_last_trade = 0
 
     def _enter_long(self, price: float) -> None:
@@ -156,7 +144,7 @@ class TeamStrategy(TeamStrategyBase):
         self._sl_price = price * (1 - self.config.stop_loss_pct)
         self._bars_in_trade = 0
 
-    def _enter_short(self, price: float) -> None:
+    def _close_position(self) -> None:
         qty = self.instrument.make_qty(self.config.trade_size)
         order = self.order_factory.market(
             instrument_id=self.config.instrument_id,
@@ -165,30 +153,6 @@ class TeamStrategy(TeamStrategyBase):
             time_in_force=TimeInForce.GTC,
         )
         self.submit_order(order)
-        self._position_side = "short"
-        self._tp_price = price * (1 - self.config.take_profit_pct)
-        self._sl_price = price * (1 + self.config.stop_loss_pct)
-        self._bars_in_trade = 0
-
-    def _close_position(self) -> None:
-        if self._position_side == "long":
-            qty = self.instrument.make_qty(self.config.trade_size)
-            order = self.order_factory.market(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.SELL,
-                quantity=qty,
-                time_in_force=TimeInForce.GTC,
-            )
-            self.submit_order(order)
-        elif self._position_side == "short":
-            qty = self.instrument.make_qty(self.config.trade_size)
-            order = self.order_factory.market(
-                instrument_id=self.config.instrument_id,
-                order_side=OrderSide.BUY,
-                quantity=qty,
-                time_in_force=TimeInForce.GTC,
-            )
-            self.submit_order(order)
         self._position_side = None
         self._tp_price = None
         self._sl_price = None
