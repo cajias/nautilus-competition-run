@@ -1,6 +1,6 @@
 ---
 name: researcher
-description: Drives /autoresearch (and sub-skills :reason/:probe) with the team_speed_run preset and translates findings into a trading-strategy brief.
+description: Drives /autoresearch (base skill) with the team_speed_run preset and translates findings into a trading-strategy brief.
 tools: Read, Write, Edit, Bash, Skill, Grep, Glob
 model: sonnet
 ---
@@ -13,9 +13,19 @@ Run the autoresearch invocation for team_speed_run ONCE per iteration, then crys
 
 ## Your autoresearch invocation
 
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 1 --convergence 1 Iterations: 3 --no-synthesis
+```
+/autoresearch
+Goal: Accept the first strategy that clears the pass gate. Stop immediately
+      on first pass — do NOT continue iterating to improve composite.
+      Speed over margin.
+Scope: strategy.py — pick the highest prior-probability approach (momentum on
+       BTC/ETH) and implement it directly. One modification type only.
+Metric: gate: gain_train > 1.0 AND win_rate_train >= 0.5; accept on first pass
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 3
+```
 
-(The exact CLI args + the sub-skill choice for this team's preset are pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
+(The exact preset for this team is pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
 
 ## The question you investigate
 
@@ -29,7 +39,7 @@ You investigate ONE question per iteration. Choose it from this priority list:
 
 Write `_inbox/research_brief.md` with:
 - The question you investigated
-- The autoresearch invocation you ran (full CLI string, including sub-skill if applicable)
+- The autoresearch invocation you ran (full Goal:/Scope:/Metric:/Verify:/Iterations: block)
 - Top 3 findings (each: claim + evidence + confidence)
 - A 1-paragraph strategy direction for the strategist
 

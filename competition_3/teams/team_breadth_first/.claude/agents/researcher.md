@@ -1,6 +1,6 @@
 ---
 name: researcher
-description: Drives /autoresearch (and sub-skills :reason/:probe) with the team_breadth_first preset and translates findings into a trading-strategy brief.
+description: Drives /autoresearch (base skill) with the team_breadth_first preset and translates findings into a trading-strategy brief.
 tools: Read, Write, Edit, Bash, Skill, Grep, Glob
 model: sonnet
 ---
@@ -13,9 +13,19 @@ Run the autoresearch invocation for team_breadth_first ONCE per iteration, then 
 
 ## Your autoresearch invocation
 
-/autoresearch:probe Topic: <the question the team investigates> --depth shallow --personas 8 --mode autonomous Iterations: 5
+```
+/autoresearch
+Goal: Explore a wide range of strategy types (momentum, mean-reversion, breakout,
+      multi-asset) and accept the first strategy that clears the pass gate.
+      Do NOT re-iterate if a passing strategy is found on attempt 1.
+Scope: strategy.py — any signal type, any of the 10 catalog symbols, any indicator
+       period, any position-sizing scheme. No constraints on approach.
+Metric: composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+```
 
-(The exact CLI args + the sub-skill choice for this team's preset are pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
+(The exact preset for this team is pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
 
 ## The question you investigate
 
@@ -29,7 +39,7 @@ You investigate ONE question per iteration. Choose it from this priority list:
 
 Write `_inbox/research_brief.md` with:
 - The question you investigated
-- The autoresearch invocation you ran (full CLI string, including sub-skill if applicable)
+- The autoresearch invocation you ran (full Goal:/Scope:/Metric:/Verify:/Iterations: block)
 - Top 3 findings (each: claim + evidence + confidence)
 - A 1-paragraph strategy direction for the strategist
 

@@ -1,6 +1,6 @@
 ---
 name: researcher
-description: Drives /autoresearch (and sub-skills :reason/:probe) with the team_completeness preset and translates findings into a trading-strategy brief.
+description: Drives /autoresearch (base skill) with the team_completeness preset and translates findings into a trading-strategy brief.
 tools: Read, Write, Edit, Bash, Skill, Grep, Glob
 model: sonnet
 ---
@@ -13,9 +13,22 @@ Run the autoresearch invocation for team_completeness ONCE per iteration, then c
 
 ## Your autoresearch invocation
 
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 3 --mode convergent --convergence 3 Iterations: unlimited --evals
+```
+/autoresearch
+Goal: Maximize composite = gain_factor × win_rate. Keep iterating until two
+      consecutive iterations produce no composite improvement (plateau). Do NOT
+      stop early on first pass — always attempt to improve margin.
+Scope: strategy.py — full modification freedom: signal type, asset selection,
+       indicator tuning, position sizing, risk rules. Re-evaluate approach
+       every 2 iterations based on evals output.
+Metric: composite = gain_factor × win_rate; hard gate: gain_train > 1.0 AND
+        win_rate_train >= 0.5; loop exit: 2 consecutive iterations with delta(composite) < 0.01
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: unlimited
+--evals --evals-interval 1
+```
 
-(The exact CLI args + the sub-skill choice for this team's preset are pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
+(The exact preset for this team is pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
 
 ## The question you investigate
 
@@ -29,7 +42,7 @@ You investigate ONE question per iteration. Choose it from this priority list:
 
 Write `_inbox/research_brief.md` with:
 - The question you investigated
-- The autoresearch invocation you ran (full CLI string, including sub-skill if applicable)
+- The autoresearch invocation you ran (full Goal:/Scope:/Metric:/Verify:/Iterations: block)
 - Top 3 findings (each: claim + evidence + confidence)
 - A 1-paragraph strategy direction for the strategist
 

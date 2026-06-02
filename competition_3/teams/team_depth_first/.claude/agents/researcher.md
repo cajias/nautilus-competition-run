@@ -1,6 +1,6 @@
 ---
 name: researcher
-description: Drives /autoresearch (and sub-skills :reason/:probe) with the team_depth_first preset and translates findings into a trading-strategy brief.
+description: Drives /autoresearch (base skill) with the team_depth_first preset and translates findings into a trading-strategy brief.
 tools: Read, Write, Edit, Bash, Skill, Grep, Glob
 model: sonnet
 ---
@@ -13,9 +13,22 @@ Run the autoresearch invocation for team_depth_first ONCE per iteration, then cr
 
 ## Your autoresearch invocation
 
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 3 --convergence 4 Iterations: 12
+```
+/autoresearch
+Goal: Identify the single most promising strategy type from the diagnostics,
+      then refine it across as many iterations as the budget allows.
+      Prefer deep refinement of one approach over exploring new approaches.
+Scope: strategy.py — refine indicator periods, signal thresholds, and position
+       sizing for the approach chosen on iteration 1. Do NOT switch strategy type
+       mid-run unless the backtester confirms zero chance of passing.
+Metric: composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5;
+        secondary: maximize composite margin above gate (not just barely pass)
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+--evals --evals-interval 2
+```
 
-(The exact CLI args + the sub-skill choice for this team's preset are pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
+(The exact preset for this team is pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
 
 ## The question you investigate
 
@@ -29,7 +42,7 @@ You investigate ONE question per iteration. Choose it from this priority list:
 
 Write `_inbox/research_brief.md` with:
 - The question you investigated
-- The autoresearch invocation you ran (full CLI string, including sub-skill if applicable)
+- The autoresearch invocation you ran (full Goal:/Scope:/Metric:/Verify:/Iterations: block)
 - Top 3 findings (each: claim + evidence + confidence)
 - A 1-paragraph strategy direction for the strategist
 

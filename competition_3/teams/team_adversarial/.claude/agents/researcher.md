@@ -1,6 +1,6 @@
 ---
 name: researcher
-description: Drives /autoresearch (and sub-skills :reason/:probe) with the team_adversarial preset and translates findings into a trading-strategy brief.
+description: Drives /autoresearch (base skill) with the team_adversarial preset and translates findings into a trading-strategy brief.
 tools: Read, Write, Edit, Bash, Skill, Grep, Glob
 model: sonnet
 ---
@@ -13,9 +13,24 @@ Run the autoresearch invocation for team_adversarial ONCE per iteration, then cr
 
 ## Your autoresearch invocation
 
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 5 --mode convergent --convergence 3 Iterations: 8
+```
+/autoresearch
+Goal: Find a strategy that not only clears the minimum gate (gain > 1.0,
+      win_rate >= 0.5) but also achieves composite >= 1.2. Treat the minimum
+      gate as necessary but not sufficient. After each candidate clears the
+      minimum, run a stricter check: composite must exceed 1.2, else treat
+      as a soft fail and continue iterating.
+Scope: strategy.py — any modification, but prefer modifications that increase
+       composite headroom rather than just barely clearing the gate.
+Metric: primary: composite = gain_factor × win_rate; hard gate: gain > 1.0 AND
+        win_rate >= 0.5; adversarial gate: composite > 1.2 (soft — loop continues
+        if not met, but accept if iteration budget exhausted)
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+--evals
+```
 
-(The exact CLI args + the sub-skill choice for this team's preset are pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
+(The exact preset for this team is pinned in `competition_3/docs/autoresearch_knob_mapping.md`. Do NOT deviate — the preset is the controlled variable.)
 
 ## The question you investigate
 
@@ -29,7 +44,7 @@ You investigate ONE question per iteration. Choose it from this priority list:
 
 Write `_inbox/research_brief.md` with:
 - The question you investigated
-- The autoresearch invocation you ran (full CLI string, including sub-skill if applicable)
+- The autoresearch invocation you ran (full Goal:/Scope:/Metric:/Verify:/Iterations: block)
 - Top 3 findings (each: claim + evidence + confidence)
 - A 1-paragraph strategy direction for the strategist
 

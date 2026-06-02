@@ -2,102 +2,186 @@
 
 **Skill version:** 2.1.2 (cache path) / 2.1.0 (SKILL.md frontmatter version field)
 **Skill path:** `/Users/rc/.claude/plugins/cache/autoresearch/autoresearch/2.1.2/skills/autoresearch/SKILL.md`
-**Skill type:** hybrid — the main `/autoresearch` command takes structured keyword args (Goal:, Scope:, Metric:, Verify:, Iterations:) and universal flags; the sub-skills each have their own typed flags
+**Skill type:** BASE `/autoresearch` — autonomous `modify → verify → keep/discard` loop
 
-## How the skill works (one-paragraph summary)
+## Correction notice (2026-06-02)
 
-`/autoresearch` is an autonomous goal-directed iteration framework, NOT a web-search synthesizer. Its core loop is: **modify → verify → keep/discard**, running against a user-defined numeric metric for up to N iterations (default 25). Sub-skills extend this into specialized loops: `/autoresearch:reason` runs adversarial debate with blind judge panels until convergence; `/autoresearch:probe` rotates 8 expert personas to interrogate a topic until constraint saturation; `/autoresearch:scenario` generates edge cases across 12 dimensions; `/autoresearch:predict` convenes 5 expert personas before implementation. Because competition_3 uses these skills for trading-research question analysis rather than code optimization, the relevant sub-skills are `:reason` (for adversarial verification + convergence) and `:probe` (for breadth of persona-driven interrogation), with loop depth controlled via `Iterations:` / `--depth` flags.
+An earlier version of this document (v1) incorrectly steered the 6 teams onto
+`/autoresearch:reason` and `/autoresearch:probe` sub-skills. Those sub-skills
+are for qualitative investigation with NO verify function. Competition_3 HAS a
+verify function (`gain > 1.0 AND win_rate >= 0.5` on the train-window backtest).
+All 6 teams now use the BASE `/autoresearch` skill with per-team preset wording.
 
-## Confirmed knobs
+## How the base skill works (one-paragraph summary)
 
-| Knob (our axis) | Skill mechanism | Args / wording | Default | Range / valid values |
-|------|-----------|-------|---------|----------------------|
-| Breadth | Number of active personas in `/autoresearch:probe` | `--personas N` or `Personas: N` | 6 | 3–8 (integers) |
-| Depth | Depth preset in `/autoresearch:probe`, or iteration count in `:reason` | `--depth shallow\|standard\|deep` in `:probe`; `Iterations: N` in `:reason` | standard (15 rounds) for `:probe`; 8 for `:reason` | shallow=5 rounds, standard=15, deep=30, or explicit `Iterations: N`; "unlimited" for unbounded |
-| Verification | Number of blind judges in `/autoresearch:reason` | `--judges N` or `Judges: N` | 3 | 3 (default), 5 (thorough), 7 (deep) |
-| Loop discipline | Convergence condition in `/autoresearch:reason` | `--convergence N` (stop when incumbent wins N consecutive rounds) or `--mode creative` (never auto-stop) | convergent, stop at 3 consecutive wins | `--convergence N` (integer); `--mode creative` for unbounded; `--mode debate` for no synthesis; first-pass = low `--convergence 1` |
+`/autoresearch` is an autonomous goal-directed iteration framework. Its core
+loop is: **modify → verify → keep/discard**, running against a user-defined
+metric for up to N iterations (default 25, opt-in unlimited). Structured
+keyword args (`Goal:`, `Scope:`, `Metric:`, `Verify:`, `Iterations:`) define
+the optimization problem; universal flags (`--evals`, `--evals-interval N`,
+`--chain <targets>`) add checkpointing and pipeline composition. Results land
+in `autoresearch/autoresearch-{YYMMDD}-{HHMM}/`.
 
-## Sub-skills
+## Confirmed knobs (real vs. emulated)
 
-| Sub-skill | One-line description |
-|---|---|
-| `/autoresearch:plan` | Convert a free-form goal into a validated Scope, Metric, and Verify config |
-| `/autoresearch:debug` | Hunt bugs via hypothesize → test → falsify loop (default 15 iterations) |
-| `/autoresearch:fix` | Crush errors one-by-one until zero remain (default 20 iterations) |
-| `/autoresearch:security` | STRIDE + OWASP audit with red-team personas (default 15 iterations) |
-| `/autoresearch:ship` | Ship through 8 phases: checklist → dry-run → deploy → verify |
-| `/autoresearch:scenario` | Generate edge cases across 12 dimensions (default 20 iterations) |
-| `/autoresearch:predict` | 5 expert personas debate a decision before implementation |
-| `/autoresearch:learn` | Scout codebase, generate docs, validate, and fix in a loop (default 10 iterations) |
-| `/autoresearch:reason` | Adversarial debate with blind judge panel until convergence (default 8 rounds) — primary skill for competition_3 research tasks |
-| `/autoresearch:probe` | 8 personas interrogate requirements until constraint saturation (default 15 rounds) — primary skill for breadth/depth axes |
-| `/autoresearch:evals` | Analyze iteration results for trends, plateaus, and regressions |
+The base skill exposes two real runtime knobs and the rest are emulated via
+prompt wording (the Scope/Goal/Metric args).
+
+| Knob (our axis) | Real or emulated | Mechanism |
+|---|---|---|
+| Iteration budget | **Real** | `Iterations: N` (default 25; `Iterations: unlimited` to opt-in) |
+| Mid-loop checkpoints | **Real** | `--evals` flag + `--evals-interval N` |
+| Modification breadth | **Emulated** | Scope: wording — wide ("any signal logic, any indicator, any parameter") vs. narrow ("only adjust indicator periods") |
+| Acceptance strictness | **Emulated** | Metric:/Goal: wording — strict gate ("must exceed threshold by 5%") vs. first-pass ("accept first strategy clearing the gate") |
+| Verification depth | **Emulated** | Verify: command — fast smoke test vs. full walk-forward backtest |
+| Stop condition | **Emulated** | Iterations: cap + `--evals` plateau detection vs. explicit "stop when no improvement for K rounds" in Goal: |
+
+## Verify command (shared across all 6 teams)
+
+```
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+```
+
+Pass gate: `gain_train > 1.0 AND win_rate_train >= 0.5`
+Score: `composite = gain_factor × win_rate`
 
 ## Preset invocations
 
-The primary sub-skill for competition_3 research is `/autoresearch:reason`, which maps most directly to the breadth/depth/verification/loop axes. Breadth (number of angles explored) is emulated via judge count and synthesizer behavior; depth is emulated via `Iterations:` and `--convergence`; verification panel size is `--judges N`; loop discipline is `--mode` + `--convergence`.
-
-A secondary option is `/autoresearch:probe` for open-ended topic interrogation where the team wants persona-driven breadth across 8 expert viewpoints. Each team's researcher can chain them: `:probe` for initial exploration, then `:reason` for adversarial convergence.
-
 ### team_breadth_first
 
-```
-/autoresearch:probe Topic: <the question the team investigates> --depth shallow --personas 8 --mode autonomous Iterations: 5
-```
+Behavioral intent: explore many different modifications per iteration (wide Scope), accept the first strategy that clears the gate. Low iteration budget because the team expects one of the early broad candidates to pass.
 
-Behavioral intent: Activate all 8 personas for maximum breadth, but run only 5 shallow rounds (the `shallow` depth preset). Light verification — no `:reason` follow-up unless explicitly chained. Single pass through the persona rotation.
+```
+/autoresearch
+Goal: Explore a wide range of strategy types (momentum, mean-reversion, breakout,
+      multi-asset) and accept the first strategy that clears the pass gate.
+      Do NOT re-iterate if a passing strategy is found on attempt 1.
+Scope: strategy.py — any signal type, any of the 10 catalog symbols, any indicator
+       period, any position-sizing scheme. No constraints on approach.
+Metric: composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+```
 
 ### team_depth_first
 
-```
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 3 --convergence 4 Iterations: 12
-```
+Behavioral intent: commit to one promising approach early, then refine it deeply across many iterations. Narrow Scope (fewer but carefully chosen modifications), full iteration budget.
 
-Behavioral intent: Fewer parallel angles (3 judges, no wide probe) but deep iterative refinement — 12 rounds with a convergence threshold of 4 consecutive wins before stopping. Medium verification via 3-judge panel.
+```
+/autoresearch
+Goal: Identify the single most promising strategy type from the diagnostics,
+      then refine it across as many iterations as the budget allows.
+      Prefer deep refinement of one approach over exploring new approaches.
+Scope: strategy.py — refine indicator periods, signal thresholds, and position
+       sizing for the approach chosen on iteration 1. Do NOT switch strategy type
+       mid-run unless the backtester confirms zero chance of passing.
+Metric: composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5;
+        secondary: maximize composite margin above gate (not just barely pass)
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+--evals --evals-interval 2
+```
 
 ### team_adversarial
 
-```
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 5 --mode convergent --convergence 3 Iterations: 8
-```
+Behavioral intent: after each accepted change, apply a stricter re-verify gate before committing. Any strategy that passes must also pass a higher bar (e.g., composite > 1.2) before being accepted as the round winner.
 
-Behavioral intent: Full 5-judge adversarial panel (the "thorough" setting), medium depth (default 8 rounds), convergent mode. Single pass — stops when a candidate wins 3 consecutive rounds.
+```
+/autoresearch
+Goal: Find a strategy that not only clears the minimum gate (gain > 1.0,
+      win_rate >= 0.5) but also achieves composite >= 1.2. Treat the minimum
+      gate as necessary but not sufficient. After each candidate clears the
+      minimum, run a stricter check: composite must exceed 1.2, else treat
+      as a soft fail and continue iterating.
+Scope: strategy.py — any modification, but prefer modifications that increase
+       composite headroom rather than just barely clearing the gate.
+Metric: primary: composite = gain_factor × win_rate; hard gate: gain > 1.0 AND
+        win_rate >= 0.5; adversarial gate: composite > 1.2 (soft — loop continues
+        if not met, but accept if iteration budget exhausted)
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+--evals
+```
 
 ### team_speed_run
 
-```
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 1 --convergence 1 Iterations: 3 --no-synthesis
-```
+Behavioral intent: minimum iteration budget, accept the very first strategy that clears the gate. No refinement after first pass. Get to paper trading as fast as possible.
 
-Behavioral intent: Minimal verification — 1 judge, lowest convergence threshold (1 win = done), maximum 3 iterations, synthesis skipped. Fastest possible single pass through the adversarial loop.
+```
+/autoresearch
+Goal: Accept the first strategy that clears the pass gate. Stop immediately
+      on first pass — do NOT continue iterating to improve composite.
+      Speed over margin.
+Scope: strategy.py — pick the highest prior-probability approach (momentum on
+       BTC/ETH) and implement it directly. One modification type only.
+Metric: gate: gain_train > 1.0 AND win_rate_train >= 0.5; accept on first pass
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 3
+```
 
 ### team_balanced
 
-```
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 3 --convergence 3 Iterations: 8
-```
+Behavioral intent: all defaults — median breadth, median iteration depth, accept first passing strategy. This is the control / baseline configuration.
 
-Behavioral intent: All defaults — 3-judge panel, convergence after 3 consecutive wins, 8-iteration cap. This is the control / baseline configuration representing the skill's out-of-the-box behavior.
+```
+/autoresearch
+Goal: Find a reliable strategy that clears the pass gate. Balance exploration
+      of different approaches with refinement of promising ones.
+Scope: strategy.py — consider 2-3 strategy types on iteration 1, then refine
+       the most promising across remaining iterations.
+Metric: composite = gain_factor × win_rate; gate: gain_train > 1.0 AND win_rate_train >= 0.5
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: 5
+```
 
 ### team_completeness
 
+Behavioral intent: loop until no improvement for K consecutive iterations (plateau condition). Unbounded iteration within the competition's 3600 s wall clock. Use `--evals` for plateau detection and let the evals system signal when to stop.
+
 ```
-/autoresearch:reason Task: <the question the team investigates> Domain: research --judges 3 --mode convergent --convergence 3 Iterations: unlimited --evals
+/autoresearch
+Goal: Maximize composite = gain_factor × win_rate. Keep iterating until two
+      consecutive iterations produce no composite improvement (plateau). Do NOT
+      stop early on first pass — always attempt to improve margin.
+Scope: strategy.py — full modification freedom: signal type, asset selection,
+       indicator tuning, position sizing, risk rules. Re-evaluate approach
+       every 2 iterations based on evals output.
+Metric: composite = gain_factor × win_rate; hard gate: gain_train > 1.0 AND
+        win_rate_train >= 0.5; loop exit: 2 consecutive iterations with delta(composite) < 0.01
+Verify: uv run python backtest.py --strategy attempts/<iter>/strategy.py
+Iterations: unlimited
+--evals --evals-interval 1
 ```
 
-Behavioral intent: Unbounded iterations (`Iterations: unlimited`) with convergence requiring 3 consecutive wins — meaning the loop continues until the answer truly stabilizes. The `--evals` flag adds mid-loop checkpoints. After two consecutive checkpoints with no improvement (plateau detection), the evals system recommends stopping — emulating "2 dry rounds" of the loop-until-dry preset.
+## Which knobs are real vs. emulated — summary
+
+| Team | Real knob used | Emulated via prompt |
+|---|---|---|
+| team_breadth_first | `Iterations: 5` | Wide Scope:, first-pass accept in Goal: |
+| team_depth_first | `Iterations: 5`, `--evals` | Narrow Scope:, refine-not-switch in Goal: |
+| team_adversarial | `Iterations: 5`, `--evals` | Stricter composite gate in Metric:/Goal: |
+| team_speed_run | `Iterations: 3` | Accept-on-first-pass in Goal:, narrow Scope: |
+| team_balanced | `Iterations: 5` | Balanced Goal: wording (control) |
+| team_completeness | `Iterations: unlimited`, `--evals --evals-interval 1` | Plateau condition in Goal:/Metric: |
+
+## Sub-skills reference (not used in this competition)
+
+| Sub-skill | When to use instead |
+|---|---|
+| `/autoresearch:plan` | Convert free-form goal into Scope/Metric/Verify before first run |
+| `/autoresearch:reason` | Adversarial debate of a CLAIM with no verify function |
+| `/autoresearch:probe` | 8-persona topic interrogation with no verify function |
+| `/autoresearch:evals` | Analyze completed run results post-hoc |
+| `/autoresearch:debug` | Bug hunting (not metric optimization) |
 
 ## Limitations / gotchas
 
-- **`/autoresearch` (the base command) is a code-metric optimizer**, not a research synthesizer. The competition should use `/autoresearch:reason` and `/autoresearch:probe` as the primary invocations for question-answer research tasks.
-- **`--judges 1` is inferred behavior for team_speed_run**: the `:reason` command documents `--judges N` with values 3, 5, 7. Using `--judges 1` pushes below the documented minimum. If the skill rejects it, substitute `--judges 3 --convergence 1 Iterations: 2 --no-synthesis` as the minimal-verify equivalent.
 - **`Iterations: unlimited` requires explicit opt-in** per the SKILL.md safety invariant: "Bounded by default. Override with `Iterations: unlimited`."
-- **Convergence threshold `--convergence N`**: defaults to 3. Lowering it accelerates termination; raising it demands more stability before stopping.
-- **`--mode creative`** never auto-stops — use only if the team explicitly wants unbounded divergent exploration.
-- **`--adversarial` flag in `:probe`** rotates Skeptic, Contradiction Finder, and Edge-Case Hunter to the front of the persona rotation — useful for team_adversarial if they use `:probe` as a preprocessing step.
-- **Output directories** are always written to `autoresearch/{subcommand}-{YYMMDD}-{HHMM}/` relative to the working directory. Plan Task 9 should note this when configuring researcher working directories.
-- **Chain handoff**: all sub-skills write `handoff.json` and support `--chain <targets>` for sequential pipeline composition (e.g., `--chain reason` after `:probe`).
+- **Wall-clock cap**: the competition harness enforces `per_train_timeout_seconds = 3600 s`. `Iterations: unlimited` is bounded in practice by that wall clock — not by the skill.
+- **Output directories** always land in `autoresearch/autoresearch-{YYMMDD}-{HHMM}/` relative to the working directory.
+- **Chain handoff**: use `--chain evals` to run the evals sub-skill automatically after the base loop completes.
+- **Prior version of this doc** used `:reason`/`:probe` flags (`--judges N`, `--convergence N`, `--personas N`). Those are WRONG for the base skill — the base skill does not accept those flags.
 
 ## Validation
 
-This mapping was verified by: reading `SKILL.md` (the main skill manifest), `commands/autoresearch.md` (the base loop command spec), `commands/autoresearch/reason.md` (the adversarial debate sub-skill with full flag documentation), and `commands/autoresearch/probe.md` (the persona interrogation sub-skill). All flag names, defaults, and valid values are drawn directly from the `argument-hint` frontmatter and `Parse Arguments` sections of those files. Did NOT actually invoke `/autoresearch` (no live Claude session required for this scaffolding task).
+This mapping was verified by: reading `SKILL.md` v2.1.0 (the main skill manifest at the cache path above). All keyword arg names (`Goal:`, `Scope:`, `Metric:`, `Verify:`, `Iterations:`) and universal flags (`--evals`, `--chain`) are drawn directly from the SKILL.md table. The sub-skill flags (`--judges`, `--convergence`, `--personas`) that appeared in v1 of this doc belong to `:reason`/`:probe` sub-skills and have been removed.
