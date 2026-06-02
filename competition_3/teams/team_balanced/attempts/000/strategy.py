@@ -33,7 +33,7 @@ from competition_3.shared.team_strategy_base import TeamStrategyBase
 
 # --- hardcoded strategy parameters (config carries only instrument_id+bar_type) ---
 RSI_PERIOD = 14
-RSI_ENTRY = 30.0           # deep-oversold long entry
+RSI_ENTRY = 25.0           # iter3: tighter threshold; EDA shows WR=0.65 vs 0.564 for RSI<30
 EMA_TREND_PERIOD = 0       # buy dips only when close > EMA(this); 0 disables the filter
 TP_PCT = 0.025             # take-profit fraction (TP>SL: positive R:R, satisfies risk rule)
 SL_PCT = 0.024             # stop-loss fraction (rarely triggers; losers exit via time-stop)
