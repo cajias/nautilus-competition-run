@@ -38,7 +38,25 @@ from nautilus_competition._metrics import metrics_from_engine    # noqa: E402
 from nautilus_competition.config import load_competition_config  # noqa: E402
 
 CONFIG_PATH = COMPETITION_DIR / "config.yaml"
-ROUND_INDEX = 0  # iteration 0 → round 0 train window
+
+
+def _resolve_round_index() -> int:
+    """Read round_index from _inbox/context.md so the train gate tests the
+    SAME window the harness will OOS-test. Hardcoding 0 silently gated the
+    wrong window in multi-round runs (see memory: backtest-py-hardcodes-round-0).
+    Falls back to 0 if context.md is absent/unparseable.
+    """
+    ctx = TEAM_DIR / "_inbox" / "context.md"
+    try:
+        for line in ctx.read_text().splitlines():
+            if line.strip().startswith("- round_index:"):
+                return int(line.split(":", 1)[1].strip())
+    except Exception:
+        pass
+    return 0
+
+
+ROUND_INDEX = _resolve_round_index()
 
 
 def _load_strategy_module(strategy_path: Path):

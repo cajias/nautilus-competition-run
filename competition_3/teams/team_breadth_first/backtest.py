@@ -33,7 +33,26 @@ from nautilus_competition._metrics import metrics_from_engine    # noqa: E402
 from nautilus_competition.config import load_competition_config  # noqa: E402
 
 CONFIG_PATH = COMPETITION_DIR / "config.yaml"
-ROUND_INDEX = 0  # iteration 0 → round 0 train window
+
+
+def _resolve_round_index() -> int:
+    """Resolve the harness round index from _inbox/context.md.
+
+    The harness advances the round each session; gating on a hardcoded round 0
+    would validate against the wrong train window. Falls back to 0 if the
+    context file is missing or unparseable.
+    """
+    ctx = TEAM_DIR / "_inbox" / "context.md"
+    for raw in ctx.read_text().splitlines():
+        line = raw.strip().lstrip("-").strip()
+        if line.startswith("round_index:"):
+            return int(line.split(":", 1)[1].strip())
+    raise RuntimeError(
+        f"round_index not found in {ctx} — refusing to silently gate round 0"
+    )
+
+
+ROUND_INDEX = _resolve_round_index()  # resolved from _inbox/context.md each round
 
 
 def _load_strategy_module(strategy_path: Path):
@@ -50,6 +69,10 @@ def run(strategy_path: Path) -> dict:
 
     config = load_competition_config(CONFIG_PATH)
     window = config.windows[ROUND_INDEX].train
+    print(
+        f"[gate] round_index={ROUND_INDEX} train_window={window.start}..{window.end}",
+        file=sys.stderr,
+    )
 
     mod = _load_strategy_module(strategy_path)
     cfg = mod.TeamStrategyConfig(

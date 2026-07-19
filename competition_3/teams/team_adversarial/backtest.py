@@ -38,7 +38,26 @@ from nautilus_competition._metrics import metrics_from_engine    # noqa: E402
 from nautilus_competition.config import load_competition_config  # noqa: E402
 
 CONFIG_PATH = COMPETITION_DIR / "config.yaml"
-ROUND_INDEX = 0  # iteration 0 → round 0 train window
+
+
+def _resolve_round_index() -> int:
+    """Resolve the harness round from _inbox/context.md.
+
+    The attempt dir uses ctx.iteration (often 0), but the harness gates on
+    ctx.round_index = config.windows[round_index]. Hardcoding 0 silently gates
+    the wrong train window for any round>0. See memory: backtest-py-hardcodes-round-0.
+    """
+    ctx = TEAM_DIR / "_inbox" / "context.md"
+    try:
+        for line in ctx.read_text().splitlines():
+            if line.strip().startswith("- round_index:"):
+                return int(line.split(":", 1)[1].strip())
+    except Exception:
+        pass
+    return 0
+
+
+ROUND_INDEX = _resolve_round_index()
 
 
 def _load_strategy_module(strategy_path: Path):
