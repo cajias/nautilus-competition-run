@@ -39,6 +39,7 @@ __pycache__/
 .claude/scheduled_tasks.lock
 .claude/sessions/
 .claude/cache/
+.claude/hooks/.logs/
 
 # Runtime-mutable persistence files written by team Claude sessions.
 # Seed versions of `correction_map.json`, `regime_weights.json`, `bandit/state.json`,
